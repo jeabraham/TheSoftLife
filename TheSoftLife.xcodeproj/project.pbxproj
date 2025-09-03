@@ -6,8 +6,16 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		EB08BC1F2E68E55000BA3E37 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = EB08BC152E68E55000BA3E37 /* README.md */; };
+		EB08BC202E68E55000BA3E37 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = EB08BC142E68E55000BA3E37 /* LICENSE */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		EB08BC052E68E51200BA3E37 /* TheSoftLife.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TheSoftLife.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EB08BC132E68E54200BA3E37 /* TheSoftLife.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TheSoftLife.entitlements; sourceTree = "<group>"; };
+		EB08BC142E68E55000BA3E37 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
+		EB08BC152E68E55000BA3E37 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +42,9 @@
 			children = (
 				EB08BC072E68E51200BA3E37 /* TheSoftLife */,
 				EB08BC062E68E51200BA3E37 /* Products */,
+				EB08BC132E68E54200BA3E37 /* TheSoftLife.entitlements */,
+				EB08BC142E68E55000BA3E37 /* LICENSE */,
+				EB08BC152E68E55000BA3E37 /* README.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -109,6 +120,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EB08BC1F2E68E55000BA3E37 /* README.md in Resources */,
+				EB08BC202E68E55000BA3E37 /* LICENSE in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
