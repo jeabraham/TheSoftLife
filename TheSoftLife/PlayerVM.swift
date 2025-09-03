@@ -7,46 +7,47 @@ final class PlayerVM: NSObject, ObservableObject {
     @Published var currentFileName: String = "—"
     @Published var isPlaying: Bool = false
     @Published var showStopConfirm: Bool = false
-    
+
     @Published var statusText: String = "Idle"
     @Published var totalFiles: Int = 0
     @Published var processedFiles: Int = 0
-    
+
     @Published var rate: Float = 0.48
     @Published var pitch: Float = 1.0
     @Published var languageCode: String = "en-CA"
     @Published var voiceIdentifier: String? = nil
     @Published var canControlPlayback: Bool = false
-    
+
     private var player = AVQueuePlayer()
     private var itemEndObserver: Any?
-    
+
     private let synthQueue = OperationQueue()
     private let fm = FileManager.default
     private var cacheDir: URL {
         try! fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("SpokenCache", isDirectory: true)
     }
-    
+
     private let bookmarkKey = "chosenFolderBookmark"
-    
+
     override init() {
         synthQueue.maxConcurrentOperationCount = 1
         super.init()
+        player.automaticallyWaitsToMinimizeStalling = false // PATCH: start immediately
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         configureAudioSession()
         restoreBookmarkedFolderIfAny()
         observePlaybackEnd()
     }
-    
+
     deinit {
         if let obs = itemEndObserver { NotificationCenter.default.removeObserver(obs) }
     }
-    
+
     func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .duckOthers])
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth /*, .duckOthers*/])
             try session.setActive(true)
         } catch {
             print("Audio session error (spokenAudio): \(error) — retrying with .default")
@@ -58,14 +59,14 @@ final class PlayerVM: NSObject, ObservableObject {
             }
         }
     }
-    
+
     func pickFolder(presenter: UIViewController) {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
         picker.allowsMultipleSelection = false
         picker.delegate = self
         presenter.present(picker, animated: true)
     }
-    
+
     func restoreBookmarkedFolderIfAny() {
         guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
         var stale = false
@@ -75,34 +76,35 @@ final class PlayerVM: NSObject, ObservableObject {
             }
         }
     }
-    
+
     private func saveBookmark(for url: URL) {
         if let data = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
             UserDefaults.standard.set(data, forKey: bookmarkKey)
         }
     }
-    
+
     func startSession() {
         guard let folderURL else { return }
         let files = textFiles(in: folderURL)
         guard !files.isEmpty else { statusText = "No .txt or .rtf files"; return }
-        
+
         totalFiles = files.count
         processedFiles = 0
         statusText = "Rendering 1/\(totalFiles)…"
-        
+
         stopSession(resetUIOnly: true)
-        
+
         let first = files[0]
         synthOne(fileURL: first) { [weak self] audioURL in
             guard let self else { return }
             self.enqueueAndMaybePlay(audioURL)
-            self.currentFileName = first.lastPathComponent
+            // PATCH: update name as soon as item becomes current
+            self.currentFileName = first.deletingPathExtension().lastPathComponent
             self.isPlaying = true
             self.processedFiles += 1
             self.statusText = "Rendered \(self.processedFiles)/\(self.totalFiles)."
         }
-        
+
         for (idx, file) in files.dropFirst().enumerated() {
             synthQueue.addOperation { [weak self] in
                 guard let self else { return }
@@ -120,24 +122,17 @@ final class PlayerVM: NSObject, ObservableObject {
             }
         }
     }
-    
-    func pauseResume() {
-        // Helpful debug
-        logPlayerState(prefix: "before toggle")
 
+    func pauseResume() {
+        logPlayerState(prefix: "before toggle")
         if player.timeControlStatus == .paused {
-            // Some devices deactivate the session on pause; reactivate before resuming
-            do { try AVAudioSession.sharedInstance().setActive(true) } catch {
-                print("AVAudioSession setActive(true) failed: \(error)")
-            }
-            // Resume immediately at normal rate (more reliable than .play() after a pause)
+            ensureActiveAudioSession()
             player.playImmediately(atRate: 1.0)
             isPlaying = true
         } else {
             player.pause()
             isPlaying = false
         }
-
         logPlayerState(prefix: "after toggle")
     }
 
@@ -151,24 +146,17 @@ final class PlayerVM: NSObject, ObservableObject {
             }
         }()
         let hasItem = player.currentItem != nil
-        print("[\(prefix)] status=\(status) rate=\(player.rate) hasItem=\(hasItem)")
+        print("[\(prefix)] status=\(status) rate=\(player.rate) hasItem=\(hasItem) queueCount=\(player.items().count)")
     }
 
-    
-    func stopTapped() {
-        showStopConfirm = true
-    }
-    
-    func stopConfirmed() {
-        stopSession(resetUIOnly: false)
-    }
-    
+    func stopTapped() { showStopConfirm = true }
+    func stopConfirmed() { stopSession(resetUIOnly: false) }
+
     private func stopSession(resetUIOnly: Bool) {
-        // Tear down old player completely
         player.pause()
         player.removeAllItems()
-        // Replace with a fresh instance to avoid stale state after Stop
-        player = AVQueuePlayer()
+        player = AVQueuePlayer() // PATCH: fresh player after stop
+        player.automaticallyWaitsToMinimizeStalling = false
 
         if !resetUIOnly {
             statusText = "Idle"
@@ -179,7 +167,6 @@ final class PlayerVM: NSObject, ObservableObject {
         }
         canControlPlayback = false
 
-        // optional: clear cache folder
         try? fm.removeItem(at: cacheDir)
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
@@ -189,7 +176,6 @@ final class PlayerVM: NSObject, ObservableObject {
         catch { print("setActive(true) failed: \(error)") }
     }
 
-    
     private func enqueueAndMaybePlay(_ audioURL: URL) {
         let item = AVPlayerItem(url: audioURL)
 
@@ -197,21 +183,30 @@ final class PlayerVM: NSObject, ObservableObject {
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] n in
             guard let self, let urlAsset = (n.object as? AVPlayerItem)?.asset as? AVURLAsset else { return }
-            self.currentFileName = urlAsset.url.deletingPathExtension().lastPathComponent
+            // PATCH: when an item ends, advance displayed name to the next item if any
+            if let next = self.player.items().first,
+               let nextAsset = next.asset as? AVURLAsset {
+                self.currentFileName = nextAsset.url.deletingPathExtension().lastPathComponent
+            } else {
+                self.currentFileName = urlAsset.url.deletingPathExtension().lastPathComponent
+            }
         }
 
         player.insert(item, after: nil)
         canControlPlayback = true
 
-        // If we're not playing, kick the engine back on
+        // If nothing was playing, start immediately
         if player.timeControlStatus != .playing {
             ensureActiveAudioSession()
-            player.playImmediately(atRate: 1.0)   // <-- stronger than .play() after Stop
+            player.playImmediately(atRate: 1.0)
             isPlaying = true
+            // PATCH: set current file name when first item actually starts
+            if let asset = item.asset as? AVURLAsset {
+                currentFileName = asset.url.deletingPathExtension().lastPathComponent
+            }
         }
     }
 
-    
     private func observePlaybackEnd() {
         itemEndObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
@@ -221,7 +216,7 @@ final class PlayerVM: NSObject, ObservableObject {
             }
         }
     }
-    
+
     private func textFiles(in folder: URL) -> [URL] {
         guard folder.startAccessingSecurityScopedResource() else { return [] }
         defer { folder.stopAccessingSecurityScopedResource() }
@@ -232,11 +227,23 @@ final class PlayerVM: NSObject, ObservableObject {
         }
         return filtered.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
-    
+
     private func synthOne(fileURL: URL, completion: @escaping (URL) -> Void) {
-        let text = (try? Self.extractText(from: fileURL)) ?? ""
+        let raw = (try? Self.extractText(from: fileURL)) ?? ""
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseName = fileURL.deletingPathExtension().lastPathComponent
         let outURL = cacheDir.appendingPathComponent("\(baseName).m4a")
+
+        // PATCH: if file is empty, skip but keep progress flowing
+        guard !text.isEmpty else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.processedFiles += 1
+                if self.processedFiles == self.totalFiles { self.statusText = "All rendered." }
+            }
+            return
+        }
+
         TTSSynthesizer.shared.synthesizeToFile(text: text,
                                                languageCode: languageCode,
                                                voiceIdentifier: voiceIdentifier,
@@ -246,7 +253,7 @@ final class PlayerVM: NSObject, ObservableObject {
             if success { completion(outURL) }
         }
     }
-    
+
     static func extractText(from url: URL) throws -> String {
         if url.pathExtension.lowercased() == "txt" {
             return try String(contentsOf: url, encoding: .utf8)
