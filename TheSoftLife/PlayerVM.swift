@@ -16,6 +16,7 @@ final class PlayerVM: NSObject, ObservableObject {
     @Published var pitch: Float = 1.0
     @Published var languageCode: String = "en-CA"
     @Published var voiceIdentifier: String? = nil
+    @Published var canControlPlayback: Bool = false
     
     private var player = AVQueuePlayer()
     private var itemEndObserver: Any?
@@ -121,14 +122,38 @@ final class PlayerVM: NSObject, ObservableObject {
     }
     
     func pauseResume() {
+        // Helpful debug
+        logPlayerState(prefix: "before toggle")
+
         if player.timeControlStatus == .paused {
-            player.play()
+            // Some devices deactivate the session on pause; reactivate before resuming
+            do { try AVAudioSession.sharedInstance().setActive(true) } catch {
+                print("AVAudioSession setActive(true) failed: \(error)")
+            }
+            // Resume immediately at normal rate (more reliable than .play() after a pause)
+            player.playImmediately(atRate: 1.0)
             isPlaying = true
         } else {
             player.pause()
             isPlaying = false
         }
+
+        logPlayerState(prefix: "after toggle")
     }
+
+    private func logPlayerState(prefix: String) {
+        let status: String = {
+            switch player.timeControlStatus {
+            case .paused: return "paused"
+            case .playing: return "playing"
+            case .waitingToPlayAtSpecifiedRate: return "waiting"
+            @unknown default: return "unknown"
+            }
+        }()
+        let hasItem = player.currentItem != nil
+        print("[\(prefix)] status=\(status) rate=\(player.rate) hasItem=\(hasItem)")
+    }
+
     
     func stopTapped() {
         showStopConfirm = true
@@ -141,6 +166,7 @@ final class PlayerVM: NSObject, ObservableObject {
     private func stopSession(resetUIOnly: Bool) {
         player.pause()
         player.removeAllItems()
+        canControlPlayback = false
         if !resetUIOnly {
             isPlaying = false
             currentFileName = "—"
@@ -156,6 +182,7 @@ final class PlayerVM: NSObject, ObservableObject {
             self.currentFileName = urlAsset.url.deletingPathExtension().lastPathComponent
         }
         player.insert(item, after: nil)
+        canControlPlayback = true
         if player.timeControlStatus != .playing { player.play() }
     }
     

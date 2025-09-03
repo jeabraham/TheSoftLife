@@ -18,9 +18,11 @@ struct ContentView: View {
                 HStack(spacing: 12) {
                     Button("Choose Folder") { presentFolderPicker() }
                     Button(vm.isPlaying ? "Pause" : "Resume") { vm.pauseResume() }
-                        .disabled(vm.folderURL == nil)
+                        .disabled(!vm.canControlPlayback)
+
                     Button("Stop") { vm.stopTapped() }
-                        .disabled(vm.folderURL == nil)
+                        .disabled(!vm.canControlPlayback)
+
                 }
                 
                 Divider()
