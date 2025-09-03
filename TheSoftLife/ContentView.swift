@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import AVFoundation   // <-- add this
+
 
 struct ContentView: View {
     @EnvironmentObject var vm: PlayerVM
@@ -19,10 +21,10 @@ struct ContentView: View {
                     Button("Choose Folder") { presentFolderPicker() }
                     Button(vm.isPlaying ? "Pause" : "Resume") { vm.pauseResume() }
                         .disabled(!vm.canControlPlayback)
-
+                    
                     Button("Stop") { vm.stopTapped() }
                         .disabled(!vm.canControlPlayback)
-
+                    
                 }
                 
                 Divider()
@@ -51,56 +53,84 @@ struct ContentView: View {
     
     @ViewBuilder
     private var settings: some View {
+        // Precompute to help the type-checker
+        let langs: [String] = vm.languagesAvailable
+        let voices = vm.voicesForSelectedLanguage   // voices filtered for vm.languageCode
+        
         VStack(alignment: .leading, spacing: 8) {
             Text("Settings").font(.title3).bold()
-
-            Picker("Language", selection: Binding(get: { vm.languageCode }, set: { newLang in
-                vm.languageCode = newLang
-                vm.voiceIdentifier = vm.voicesForSelectedLanguage.first?.identifier
-            })) {
-                ForEach(vm.languagesAvailable, id: \.self) { lang in
+            
+            // LANGUAGE
+            Picker("Language", selection: Binding<String>(
+                get: { vm.languageCode },
+                set: { newLang in
+                    vm.languageCode = newLang
+                    // pick best voice for this language (highest quality first)
+                    let best = vm.voices
+                        .filter { $0.language == newLang }
+                        .sorted { (vmQualityRank($0.quality), $0.name) < (vmQualityRank($1.quality), $1.name) }
+                        .first
+                    vm.voiceIdentifier = best?.identifier
+                }
+            )) {
+                ForEach(langs, id: \.self) { lang in
                     Text(lang).tag(lang)
                 }
             }
             .pickerStyle(.menu)
-
-            Picker("Voice", selection: Binding(get: { vm.voiceIdentifier ?? "" }, set: { newID in
-                vm.voiceIdentifier = newID.isEmpty ? nil : newID
-            })) {
-                ForEach(vm.availableVoices, id: \.identifier) { voice in
-                    Text("\(voice.name) — \(voice.language)")
-                        .tag(voice.identifier)
+            
+            // VOICE
+            Picker("Voice", selection: Binding<String>(
+                get: { vm.voiceIdentifier ?? "" },
+                set: { newID in vm.voiceIdentifier = newID.isEmpty ? nil : newID }
+            )) {
+                ForEach(voices, id: \.identifier) { v in
+                    // Display name only; we store v.identifier
+                    Text("\(v.name) — \(v.language)\(voiceQualitySuffix(v.quality))")
+                        .tag(v.identifier)
                 }
             }
             .pickerStyle(.menu)
-
-            // Rate & pitch sliders unchanged
+            
+            // RATE
             HStack {
                 Text("Rate")
-                Slider(value: Binding(get: { Double(vm.rate) }, set: { vm.rate = Float($0) }), in: 0.1...0.6)
+                Slider(value: Binding<Double>(
+                    get: { Double(vm.rate) },
+                    set: { vm.rate = Float($0) }
+                ), in: 0.1...0.6)
                 Text(String(format: "%.2f", vm.rate)).monospacedDigit()
             }
+            
+            // PITCH
             HStack {
                 Text("Pitch")
-                Slider(value: Binding(get: { Double(vm.pitch) }, set: { vm.pitch = Float($0) }), in: 0.5...2.0)
+                Slider(value: Binding<Double>(
+                    get: { Double(vm.pitch) },
+                    set: { vm.pitch = Float($0) }
+                ), in: 0.5...2.0)
                 Text(String(format: "%.2f", vm.pitch)).monospacedDigit()
             }
-
-            // Get more voices (opens Settings for the device; no deep link to the Voices page exists publicly)
+            
+            // SETTINGS LINK
             Button("Get more voices…") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
             }
             .font(.body)
-
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-                vm.reloadVoices()
-                vm.refreshDefaultVoiceIfNeeded()
-            }
-
+            
+            Text("Install voices in Settings → Accessibility → Spoken Content → Voices.")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+        }
+        // Attach .onReceive to the container, not the Button
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            vm.reloadVoices()
+            vm.refreshDefaultVoiceIfNeeded()
         }
     }
+    
     
     private func presentFolderPicker() {
         guard let root = UIApplication.shared.connectedScenes
@@ -108,8 +138,26 @@ struct ContentView: View {
             .first?.keyWindow?.rootViewController else { return }
         vm.pickFolder(presenter: root)
     }
+
+   
 }
 
 private extension UIWindowScene {
     var keyWindow: UIWindow? { windows.first(where: { $0.isKeyWindow }) }
+}
+
+// Tiny helpers (put in the same file, outside the View body)
+private func voiceQualitySuffix(_ q: AVSpeechSynthesisVoiceQuality) -> String {
+    switch q {
+    case .premium:  return " (Premium)"
+    case .enhanced: return " (Enhanced)"
+    default:        return ""
+    }
+}
+private func vmQualityRank(_ q: AVSpeechSynthesisVoiceQuality) -> Int {
+    switch q {
+    case .premium:  return 0
+    case .enhanced: return 1
+    default:        return 2
+    }
 }

@@ -22,7 +22,9 @@ final class TTSSynthesizer: NSObject, AVSpeechSynthesizerDelegate {
         } else {
             utt.voice = AVSpeechSynthesisVoice(language: languageCode)
         }
-        
+        print("Voice:", utt.voice?.name ?? "nil", "| id:", utt.voice?.identifier ?? "nil",
+              "| lang:", utt.voice?.language ?? "nil", "| quality:", utt.voice?.quality.rawValue)
+
         var audioFile: AVAudioFile?
         var succeeded = false
         
