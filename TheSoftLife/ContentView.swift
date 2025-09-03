@@ -1,19 +1,20 @@
-
 import SwiftUI
 import UIKit
 
 struct ContentView: View {
     @EnvironmentObject var vm: PlayerVM
-
+    
     var body: some View {
         NavigationView {
             VStack(alignment: .leading, spacing: 16) {
                 Group {
                     Text("Folder: \(vm.folderURL?.lastPathComponent ?? "—")")
                     Text("Now Playing: \(vm.currentFileName)")
+                    Text(vm.statusText).font(.subheadline).foregroundColor(.secondary)
+                    ProgressView(value: Double(vm.processedFiles), total: Double(max(vm.totalFiles, 1)))
                 }
                 .font(.headline)
-
+                
                 HStack(spacing: 12) {
                     Button("Choose Folder") { presentFolderPicker() }
                     Button(vm.isPlaying ? "Pause" : "Resume") { vm.pauseResume() }
@@ -21,7 +22,7 @@ struct ContentView: View {
                     Button("Stop") { vm.stopTapped() }
                         .disabled(vm.folderURL == nil)
                 }
-
+                
                 Divider()
                 settings
                 Spacer()
@@ -42,7 +43,7 @@ struct ContentView: View {
             }
         }
     }
-
+    
     @ViewBuilder
     private var settings: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -72,7 +73,7 @@ struct ContentView: View {
             .textInputAutocapitalization(.never)
         }
     }
-
+    
     private func presentFolderPicker() {
         guard let root = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })

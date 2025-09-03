@@ -1,36 +1,34 @@
-
 import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
 
 final class PlayerVM: NSObject, ObservableObject {
-    // UI state
     @Published var folderURL: URL?
     @Published var currentFileName: String = "—"
     @Published var isPlaying: Bool = false
     @Published var showStopConfirm: Bool = false
-
-    // Settings (persist as you like)
+    
+    @Published var statusText: String = "Idle"
+    @Published var totalFiles: Int = 0
+    @Published var processedFiles: Int = 0
+    
     @Published var rate: Float = 0.48
     @Published var pitch: Float = 1.0
     @Published var languageCode: String = "en-CA"
-    @Published var voiceIdentifier: String? = nil  // optional specific voice
-
-    // Playback
+    @Published var voiceIdentifier: String? = nil
+    
     private var player = AVQueuePlayer()
     private var itemEndObserver: Any?
-
-    // Synthesis queue
+    
     private let synthQueue = OperationQueue()
     private let fm = FileManager.default
     private var cacheDir: URL {
         try! fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("SpokenCache", isDirectory: true)
     }
-
-    // Security-scoped bookmark persistence
+    
     private let bookmarkKey = "chosenFolderBookmark"
-
+    
     override init() {
         synthQueue.maxConcurrentOperationCount = 1
         super.init()
@@ -39,84 +37,89 @@ final class PlayerVM: NSObject, ObservableObject {
         restoreBookmarkedFolderIfAny()
         observePlaybackEnd()
     }
-
+    
     deinit {
         if let obs = itemEndObserver { NotificationCenter.default.removeObserver(obs) }
     }
-
+    
     func configureAudioSession() {
+        let session = AVAudioSession.sharedInstance()
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .duckOthers])
-            try AVAudioSession.sharedInstance().setActive(true)
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .duckOthers])
+            try session.setActive(true)
         } catch {
-            print("Audio session error: \(error)")
+            print("Audio session error (spokenAudio): \(error) — retrying with .default")
+            do {
+                try session.setCategory(.playback, mode: .default, options: [.allowBluetooth])
+                try session.setActive(true)
+            } catch {
+                print("Audio session error (fallback): \(error)")
+            }
         }
     }
-
-    // MARK: - Folder selection / bookmark
+    
     func pickFolder(presenter: UIViewController) {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
         picker.allowsMultipleSelection = false
         picker.delegate = self
         presenter.present(picker, animated: true)
     }
-
+    
     func restoreBookmarkedFolderIfAny() {
         guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
         var stale = false
-        if let url = try? URL(resolvingBookmarkData: data,
-                              options: [],                    // ← no .withSecurityScope on iOS
-                              relativeTo: nil,
-                              bookmarkDataIsStale: &stale) {
+        if let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) {
             if url.startAccessingSecurityScopedResource() {
                 folderURL = url
             }
         }
     }
-
+    
     private func saveBookmark(for url: URL) {
-        if let data = try? url.bookmarkData(                   // ← no .withSecurityScope on iOS
-            options: [],
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        ) {
+        if let data = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
             UserDefaults.standard.set(data, forKey: bookmarkKey)
         }
     }
-
-    // MARK: - Main flow
+    
     func startSession() {
         guard let folderURL else { return }
         let files = textFiles(in: folderURL)
-        guard !files.isEmpty else { return }
-
-        stopSession(resetUIOnly: true)  // clear any prior queue, keep session active
-
-        // Synthesize first file immediately, start playback when ready
+        guard !files.isEmpty else { statusText = "No .txt or .rtf files"; return }
+        
+        totalFiles = files.count
+        processedFiles = 0
+        statusText = "Rendering 1/\(totalFiles)…"
+        
+        stopSession(resetUIOnly: true)
+        
         let first = files[0]
         synthOne(fileURL: first) { [weak self] audioURL in
             guard let self else { return }
             self.enqueueAndMaybePlay(audioURL)
             self.currentFileName = first.lastPathComponent
             self.isPlaying = true
+            self.processedFiles += 1
+            self.statusText = "Rendered \(self.processedFiles)/\(self.totalFiles)."
         }
-
-        // Queue background synthesis for remaining files (in order)
-        for file in files.dropFirst() {
+        
+        for (idx, file) in files.dropFirst().enumerated() {
             synthQueue.addOperation { [weak self] in
                 guard let self else { return }
-                let sema = DispatchSemaphore(value: 0)
                 self.synthOne(fileURL: file) { audioURL in
                     DispatchQueue.main.async {
                         self.enqueueAndMaybePlay(audioURL)
+                        self.processedFiles += 1
+                        if self.processedFiles == self.totalFiles {
+                            self.statusText = "All rendered."
+                        } else {
+                            self.statusText = "Rendering \(idx+2)/\(self.totalFiles)…"
+                        }
                     }
-                    sema.signal()
                 }
-                sema.wait()
             }
         }
     }
-
+    
     func pauseResume() {
         if player.timeControlStatus == .paused {
             player.play()
@@ -126,15 +129,15 @@ final class PlayerVM: NSObject, ObservableObject {
             isPlaying = false
         }
     }
-
+    
     func stopTapped() {
         showStopConfirm = true
     }
-
+    
     func stopConfirmed() {
         stopSession(resetUIOnly: false)
     }
-
+    
     private func stopSession(resetUIOnly: Bool) {
         player.pause()
         player.removeAllItems()
@@ -142,11 +145,10 @@ final class PlayerVM: NSObject, ObservableObject {
             isPlaying = false
             currentFileName = "—"
         }
-        // optional: clear cache folder
         try? fm.removeItem(at: cacheDir)
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
-
+    
     private func enqueueAndMaybePlay(_ audioURL: URL) {
         let item = AVPlayerItem(url: audioURL)
         NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] n in
@@ -156,7 +158,7 @@ final class PlayerVM: NSObject, ObservableObject {
         player.insert(item, after: nil)
         if player.timeControlStatus != .playing { player.play() }
     }
-
+    
     private func observePlaybackEnd() {
         itemEndObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
@@ -166,20 +168,18 @@ final class PlayerVM: NSObject, ObservableObject {
             }
         }
     }
-
-    // MARK: - File listing
+    
     private func textFiles(in folder: URL) -> [URL] {
         guard folder.startAccessingSecurityScopedResource() else { return [] }
         defer { folder.stopAccessingSecurityScopedResource() }
         let keys: [URLResourceKey] = [.isRegularFileKey, .nameKey, .contentTypeKey]
-        let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
+        let urls = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
         let filtered = urls.filter { url in
             (url.pathExtension.lowercased() == "txt") || (url.pathExtension.lowercased() == "rtf")
         }
         return filtered.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
-
-    // MARK: - Synthesis
+    
     private func synthOne(fileURL: URL, completion: @escaping (URL) -> Void) {
         let text = (try? Self.extractText(from: fileURL)) ?? ""
         let baseName = fileURL.deletingPathExtension().lastPathComponent
@@ -193,7 +193,7 @@ final class PlayerVM: NSObject, ObservableObject {
             if success { completion(outURL) }
         }
     }
-
+    
     static func extractText(from url: URL) throws -> String {
         if url.pathExtension.lowercased() == "txt" {
             return try String(contentsOf: url, encoding: .utf8)
