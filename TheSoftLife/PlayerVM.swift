@@ -64,7 +64,10 @@ final class PlayerVM: NSObject, ObservableObject {
     func restoreBookmarkedFolderIfAny() {
         guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
         var stale = false
-        if let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &stale) {
+        if let url = try? URL(resolvingBookmarkData: data,
+                              options: [],                    // ← no .withSecurityScope on iOS
+                              relativeTo: nil,
+                              bookmarkDataIsStale: &stale) {
             if url.startAccessingSecurityScopedResource() {
                 folderURL = url
             }
@@ -72,7 +75,11 @@ final class PlayerVM: NSObject, ObservableObject {
     }
 
     private func saveBookmark(for url: URL) {
-        if let data = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
+        if let data = try? url.bookmarkData(                   // ← no .withSecurityScope on iOS
+            options: [],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ) {
             UserDefaults.standard.set(data, forKey: bookmarkKey)
         }
     }

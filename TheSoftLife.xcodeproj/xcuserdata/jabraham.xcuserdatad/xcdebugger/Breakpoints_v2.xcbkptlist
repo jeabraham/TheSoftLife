@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Bucket
+   uuid = "9D40AE9E-B9BA-45AB-8AE7-46A253E6A15A"
+   type = "1"
+   version = "2.0">
+   <Breakpoints>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "3B6F120E-14D1-4C7D-B315-9D336EA5AA1C"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "TheSoftLife/TTSSynthesizer.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "6"
+            endingLineNumber = "6"
+            landmarkName = "TTSSynthesizer"
+            landmarkType = "3">
+            <Locations>
+               <Location
+                  uuid = "3B6F120E-14D1-4C7D-B315-9D336EA5AA1C - b414c98d083ecf6b"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "TheSoftLife.TTSSynthesizer.synthesizer.getter : __C.AVSpeechSynthesizer"
+                  moduleName = "TheSoftLife.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/jabraham/Development/TheSoftLife/TheSoftLife/TTSSynthesizer.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "0"
+                  endingLineNumber = "0">
+               </Location>
+               <Location
+                  uuid = "3B6F120E-14D1-4C7D-B315-9D336EA5AA1C - a0ed5e70cbe0bc45"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "TheSoftLife.TTSSynthesizer.() -&gt; TheSoftLife.TTSSynthesizer.init() -&gt; TheSoftLife.TTSSynthesizer"
+                  moduleName = "TheSoftLife.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/jabraham/Development/TheSoftLife/TheSoftLife/TTSSynthesizer.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "6"
+                  endingLineNumber = "6">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "2A95DD0E-5E2E-4A18-8BBD-3A4175B6B8EE"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "TheSoftLife/TTSSynthesizer.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "18"
+            endingLineNumber = "18"
+            landmarkName = "synthesizeToFile(text:languageCode:voiceIdentifier:rate:pitch:outputURL:completion:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+   </Breakpoints>
+</Bucket>
