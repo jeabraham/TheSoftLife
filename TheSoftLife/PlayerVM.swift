@@ -164,27 +164,53 @@ final class PlayerVM: NSObject, ObservableObject {
     }
     
     private func stopSession(resetUIOnly: Bool) {
+        // Tear down old player completely
         player.pause()
         player.removeAllItems()
-        canControlPlayback = false
+        // Replace with a fresh instance to avoid stale state after Stop
+        player = AVQueuePlayer()
+
         if !resetUIOnly {
+            statusText = "Idle"
+            totalFiles = 0
+            processedFiles = 0
             isPlaying = false
             currentFileName = "—"
         }
+        canControlPlayback = false
+
+        // optional: clear cache folder
         try? fm.removeItem(at: cacheDir)
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
+
+    private func ensureActiveAudioSession() {
+        do { try AVAudioSession.sharedInstance().setActive(true) }
+        catch { print("setActive(true) failed: \(error)") }
+    }
+
     
     private func enqueueAndMaybePlay(_ audioURL: URL) {
         let item = AVPlayerItem(url: audioURL)
-        NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] n in
+
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] n in
             guard let self, let urlAsset = (n.object as? AVPlayerItem)?.asset as? AVURLAsset else { return }
             self.currentFileName = urlAsset.url.deletingPathExtension().lastPathComponent
         }
+
         player.insert(item, after: nil)
         canControlPlayback = true
-        if player.timeControlStatus != .playing { player.play() }
+
+        // If we're not playing, kick the engine back on
+        if player.timeControlStatus != .playing {
+            ensureActiveAudioSession()
+            player.playImmediately(atRate: 1.0)   // <-- stronger than .play() after Stop
+            isPlaying = true
+        }
     }
+
     
     private func observePlaybackEnd() {
         itemEndObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] _ in
