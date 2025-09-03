@@ -31,17 +31,20 @@ struct ContentView: View {
             }
             .padding()
             .navigationTitle("TheSoftLife")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Start") { vm.startSession() }
-                        .disabled(vm.folderURL == nil)
-                }
-            }
             .alert("Stop playback?", isPresented: $vm.showStopConfirm) {
                 Button("Cancel", role: .cancel) {}
                 Button("Stop", role: .destructive) { vm.stopConfirmed() }
             } message: {
                 Text("This will clear the queue.")
+            }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    RoutePicker().frame(width: 28, height: 28)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Start") { vm.startSession() }
+                        .disabled(vm.folderURL == nil)
+                }
             }
         }
     }
@@ -50,29 +53,52 @@ struct ContentView: View {
     private var settings: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Settings").font(.title3).bold()
+
+            Picker("Language", selection: Binding(get: { vm.languageCode }, set: { newLang in
+                vm.languageCode = newLang
+                vm.voiceIdentifier = vm.voicesForSelectedLanguage.first?.identifier
+            })) {
+                ForEach(vm.languagesAvailable, id: \.self) { lang in
+                    Text(lang).tag(lang)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Picker("Voice", selection: Binding(get: { vm.voiceIdentifier ?? "" }, set: { newID in
+                vm.voiceIdentifier = newID.isEmpty ? nil : newID
+            })) {
+                ForEach(vm.availableVoices, id: \.identifier) { voice in
+                    Text("\(voice.name) — \(voice.language)")
+                        .tag(voice.identifier)
+                }
+            }
+            .pickerStyle(.menu)
+
+            // Rate & pitch sliders unchanged
             HStack {
                 Text("Rate")
-                Slider(value: Binding(get: { Double(vm.rate) }, set: { vm.rate = Float($0) }),
-                       in: 0.3...0.6)
-                Text(String(format: "%.2f", vm.rate))
-                    .monospacedDigit()
+                Slider(value: Binding(get: { Double(vm.rate) }, set: { vm.rate = Float($0) }), in: 0.1...0.6)
+                Text(String(format: "%.2f", vm.rate)).monospacedDigit()
             }
             HStack {
                 Text("Pitch")
-                Slider(value: Binding(get: { Double(vm.pitch) }, set: { vm.pitch = Float($0) }),
-                       in: 0.5...2.0)
-                Text(String(format: "%.2f", vm.pitch))
-                    .monospacedDigit()
+                Slider(value: Binding(get: { Double(vm.pitch) }, set: { vm.pitch = Float($0) }), in: 0.5...2.0)
+                Text(String(format: "%.2f", vm.pitch)).monospacedDigit()
             }
-            TextField("Language (e.g. en-CA)", text: Binding(
-                get: { vm.languageCode },
-                set: { vm.languageCode = $0 }
-            ))
-            TextField("Voice Identifier (optional)", text: Binding(
-                get: { vm.voiceIdentifier ?? "" },
-                set: { vm.voiceIdentifier = $0.isEmpty ? nil : $0 }
-            ))
-            .textInputAutocapitalization(.never)
+
+            // Get more voices (opens Settings for the device; no deep link to the Voices page exists publicly)
+            Button("Get more voices…") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            .font(.body)
+
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                vm.reloadVoices()
+                vm.refreshDefaultVoiceIfNeeded()
+            }
+
         }
     }
     

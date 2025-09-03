@@ -18,9 +18,22 @@
 		EB08BC152E68E55000BA3E37 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		EB08BC222E68F89C00BA3E37 /* Exceptions for "TheSoftLife" folder in "TheSoftLife" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = EB08BC042E68E51200BA3E37 /* TheSoftLife */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		EB08BC072E68E51200BA3E37 /* TheSoftLife */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				EB08BC222E68F89C00BA3E37 /* Exceptions for "TheSoftLife" folder in "TheSoftLife" target */,
+			);
 			path = TheSoftLife;
 			sourceTree = "<group>";
 		};
@@ -272,6 +285,7 @@
 				DEVELOPMENT_TEAM = YZ6MTT4NDJ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TheSoftLife/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "The Soft Life";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -300,6 +314,7 @@
 				DEVELOPMENT_TEAM = YZ6MTT4NDJ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TheSoftLife/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "The Soft Life";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

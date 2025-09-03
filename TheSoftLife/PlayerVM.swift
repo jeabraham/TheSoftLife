@@ -12,11 +12,13 @@ final class PlayerVM: NSObject, ObservableObject {
     @Published var totalFiles: Int = 0
     @Published var processedFiles: Int = 0
 
-    @Published var rate: Float = 0.48
+    @Published var rate: Float = 0.3
     @Published var pitch: Float = 1.0
     @Published var languageCode: String = "en-CA"
     @Published var voiceIdentifier: String? = nil
     @Published var canControlPlayback: Bool = false
+    
+    @Published var voices: [AVSpeechSynthesisVoice] = AVSpeechSynthesisVoice.speechVoices()
 
     private var player = AVQueuePlayer()
     private var itemEndObserver: Any?
@@ -28,6 +30,11 @@ final class PlayerVM: NSObject, ObservableObject {
             .appendingPathComponent("SpokenCache", isDirectory: true)
     }
 
+    func reloadVoices() {
+        voices = AVSpeechSynthesisVoice.speechVoices()
+    }
+
+    
     private let bookmarkKey = "chosenFolderBookmark"
 
     override init() {
@@ -38,6 +45,8 @@ final class PlayerVM: NSObject, ObservableObject {
         configureAudioSession()
         restoreBookmarkedFolderIfAny()
         observePlaybackEnd()
+        reloadVoices()
+        refreshDefaultVoiceIfNeeded()
     }
 
     deinit {
@@ -47,18 +56,17 @@ final class PlayerVM: NSObject, ObservableObject {
     func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth /*, .duckOthers*/])
+            // Allow Bluetooth (A2DP/LE) and AirPlay; do NOT default to speaker.
+            try session.setCategory(.playback,
+                                    mode: .default,
+                                    options: [.allowBluetooth, .allowAirPlay])
             try session.setActive(true)
+            print("AVAudioSession: category=\(session.category.rawValue) mode=\(session.mode.rawValue)")
         } catch {
-            print("Audio session error (spokenAudio): \(error) — retrying with .default")
-            do {
-                try session.setCategory(.playback, mode: .default, options: [.allowBluetooth])
-                try session.setActive(true)
-            } catch {
-                print("Audio session error (fallback): \(error)")
-            }
+            print("Audio session error: \(error)")
         }
     }
+
 
     func pickFolder(presenter: UIViewController) {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
@@ -275,5 +283,75 @@ extension PlayerVM: UIDocumentPickerDelegate {
         _ = url.startAccessingSecurityScopedResource()
         folderURL = url
         saveBookmark(for: url)
+    }
+}
+
+extension PlayerVM {
+    var languagesAvailable: [String] {
+        let langs = Set(voices.map { $0.language })
+        // put current language first
+        return [languageCode] + langs.filter { $0 != languageCode }.sorted()
+    }
+
+    var voicesForSelectedLanguage: [AVSpeechSynthesisVoice] {
+        voices
+            .filter { $0.language == languageCode }
+            .sorted { lhs, rhs in
+                (qualityRank(lhs.quality), lhs.name) < (qualityRank(rhs.quality), rhs.name)
+            }
+    }
+
+    private func qualityRank(_ q: AVSpeechSynthesisVoiceQuality) -> Int {
+        switch q {
+        case .premium: return 0
+        case .enhanced: return 1
+        default: return 2
+        }
+    }
+
+    func refreshDefaultVoiceIfNeeded() {
+        // Keep explicit choice if it still exists
+        if let id = voiceIdentifier, AVSpeechSynthesisVoice(identifier: id) != nil { return }
+
+        // 1) Stephanie (Enhanced) en-GB
+        if let steph = voices.first(where: { $0.name == "Stephanie" && $0.language.hasPrefix("en-GB") && $0.quality == .enhanced }) {
+            languageCode = steph.language
+            voiceIdentifier = steph.identifier
+            return
+        }
+        // 2) Zoe (Premium) en-US
+        if let zoe = voices.first(where: { $0.name == "Zoe" && $0.language.hasPrefix("en-US") && $0.quality == .premium }) {
+            languageCode = zoe.language
+            voiceIdentifier = zoe.identifier
+            return
+        }
+        // 3) Any Enhanced en-GB
+        if let enGBEnh = voices.first(where: { $0.language.hasPrefix("en-GB") && $0.quality == .enhanced }) {
+            languageCode = enGBEnh.language
+            voiceIdentifier = enGBEnh.identifier
+            return
+        }
+        // 4) Any en-GB
+        if let enGBAny = voices.first(where: { $0.language.hasPrefix("en-GB") }) {
+            languageCode = enGBAny.language
+            voiceIdentifier = enGBAny.identifier
+            return
+        }
+        // 5) Fallback
+        if let first = voices.first {
+            languageCode = first.language
+            voiceIdentifier = first.identifier
+        }
+    }
+}
+
+// Utility to format a voice's display label with quality
+extension AVSpeechSynthesisVoice {
+    var qualityLabel: String {
+        switch quality {
+        case .premium: return "Premium"
+        case .enhanced: return "Enhanced"
+        default: return "Default"
+        }
     }
 }
