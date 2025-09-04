@@ -32,7 +32,7 @@ struct ContentView: View {
                 Spacer()
             }
             .padding()
-            .navigationTitle("TheSoftLife")
+            .navigationTitle("The Soft Life")
             .alert("Stop playback?", isPresented: $vm.showStopConfirm) {
                 Button("Cancel", role: .cancel) {}
                 Button("Stop", role: .destructive) { vm.stopConfirmed() }
