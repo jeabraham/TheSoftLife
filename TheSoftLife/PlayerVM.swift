@@ -26,6 +26,10 @@ final class PlayerVM: NSObject, ObservableObject {
     @Published var maxDelaySec: Double = 20
     @Published var useNotificationForLongGaps: Bool = false   // for later; not used yet
     
+    var minGapSeconds: TimeInterval = 60   // example
+    var maxGapSeconds: TimeInterval = 3600 // example
+    var shortGapThreshold: TimeInterval = 180 // ≤3 minutes -> use silence
+    
     // New: mode + services
     @Published var mode: PlaybackMode = .sequential
     private let tracker = AnalyticsTracker() // placeholder for future use

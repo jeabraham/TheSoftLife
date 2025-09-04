@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 import CoreMedia
 
-import CoreMedia
+import UserNotifications
 
 
 
@@ -91,7 +91,21 @@ final class PlaybackController: NSObject {
             }
         }
     }
+    
+    func scheduleNextNotification(after seconds: TimeInterval, fileName: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Reinforcement cue"
+        content.body = "Ready for “\(fileName)”"
+        content.categoryIdentifier = "NEXT_FILE_CATEGORY"
+        content.sound = .default
 
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, seconds), repeats: false)
+        let req = UNNotificationRequest(identifier: "next-file-\(UUID().uuidString)", content: content, trigger: trigger)
+
+        UNUserNotificationCenter.current().add(req) { err in
+            if let err = err { print("Notif schedule error:", err) }
+        }
+    }
 
     private func dumpQueue(_ label: String) {
         let items = player.items()
@@ -397,49 +411,74 @@ final class PlaybackController: NSObject {
 
     private func observePlaybackEnd() {
         itemEndObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: nil,
+            queue: .main
         ) { [weak self] n in
-            guard let self else { return }
-            
-            if let cur = player.currentItem, cur.status == .failed {
-                logItemFailure(cur, where: "after advance")
-            }
+            guard let self = self else { return }
 
+            // 1) Log & delete the item that just finished
             if let ended = n.object as? AVPlayerItem,
                let url = (ended.asset as? AVURLAsset)?.url {
                 print("✅ Finished:", url.lastPathComponent)
                 self.deleteIfInCache(url)
             }
 
-            dumpQueue("on end BEFORE advance")
+            self.dumpQueue("on end BEFORE advance")
 
+            // 2) If the finished item was the head, advance to next
             if let ended = n.object as? AVPlayerItem,
                self.player.items().first === ended {
                 print("advanceToNextItem() because head ended")
                 self.player.advanceToNextItem()
             }
 
-            dumpQueue("on end AFTER advance")
-
-            // Random loop schedule (unchanged)
-            if case .randomLoop(let minDelay, let maxDelay, _) = self.currentMode {
-                let delay = Double.random(in: minDelay...maxDelay)
-                self.scheduleNextRandom(after: delay)
-                return
+            // 3) If the new head is already failed (e.g., unplayable), skip it
+            while let head = self.player.items().first, head.status == .failed {
+                self.logItemFailure(head, where: "head failed after advance")
+                print("Skipping failed head via advanceToNextItem()")
+                self.player.advanceToNextItem()
             }
 
-            // Sequential: if queue not empty, make sure it’s running
-            if !self.player.items().isEmpty {
-                self.ensureActiveAudioSession()
-                self.player.playImmediately(atRate: 1.0)
-                print("▶️ Nudge play after end")
-                dumpQueue("after nudge")
-            } else {
-                self.delegate?.playbackController(self, didUpdateStatus: "Finished all.")
-                self.delegate?.playbackControllerDidPause(self)
+            self.dumpQueue("on end AFTER advance")
+
+            // 4) Mode-specific follow-up
+            switch self.currentMode {
+            case .randomLoop:
+                // Keep the random look-ahead buffer topped up
+                self.fillRandomBufferIfNeeded()
+
+                // If there are still items (speech or silence), keep playback alive
+                if !self.player.items().isEmpty {
+                    self.ensureActiveAudioSession()
+                    if self.player.timeControlStatus != .playing {
+                        self.player.playImmediately(atRate: 1.0)
+                        print("▶️ Nudge play (random)")
+                    }
+                    self.dumpQueue("after nudge (random)")
+                } else {
+                    // Nothing left — report paused so UI can reflect the idle state
+                    self.delegate?.playbackControllerDidPause(self)
+                }
+
+            case .sequential:
+                // If queue not empty, keep rolling
+                if !self.player.items().isEmpty {
+                    self.ensureActiveAudioSession()
+                    if self.player.timeControlStatus != .playing {
+                        self.player.playImmediately(atRate: 1.0)
+                        print("▶️ Nudge play (sequential)")
+                    }
+                    self.dumpQueue("after nudge (sequential)")
+                } else {
+                    // All done
+                    self.delegate?.playbackController(self, didUpdateStatus: "Finished all.")
+                    self.delegate?.playbackControllerDidPause(self)
+                }
             }
         }
     }
+
 
 
     private func deleteIfInCache(_ url: URL) {
