@@ -20,6 +20,12 @@ final class PlayerVM: NSObject, ObservableObject {
     @Published var voiceIdentifier: String? = nil
     @Published var voices: [AVSpeechSynthesisVoice] = AVSpeechSynthesisVoice.speechVoices()
 
+    // Add next to your other @Published settings
+    @Published var randomLoopEnabled: Bool = false
+    @Published var minDelaySec: Double = 5
+    @Published var maxDelaySec: Double = 20
+    @Published var useNotificationForLongGaps: Bool = false   // for later; not used yet
+    
     // New: mode + services
     @Published var mode: PlaybackMode = .sequential
     private let tracker = AnalyticsTracker() // placeholder for future use
@@ -43,15 +49,29 @@ final class PlayerVM: NSObject, ObservableObject {
         totalFiles = 0
         statusText = "Preparing…"
 
+        // Build settings as before
         let settings = PlaybackSettings(
             rate: rate,
             pitch: pitch,
             languageCode: languageCode,
             voiceIdentifier: voiceIdentifier
         )
-        controller.start(folderURL: folderURL, mode: mode, settings: settings)
+
+        // Decide the playback mode
+        let selectedMode: PlaybackMode
+        if randomLoopEnabled {
+            // validate and normalize the range
+            let a = minDelaySec, b = maxDelaySec
+            let (lo, hi) = a <= b ? (a, b) : (b, a)
+            selectedMode = .randomLoop(minDelay: lo, maxDelay: hi, useNotification: false)
+        } else {
+            selectedMode = .sequential
+        }
+
+        controller.start(folderURL: folderURL, mode: selectedMode, settings: settings)
         canControlPlayback = true
     }
+
 
     func pauseResume() { controller.pauseResume() }
     func stopTapped() { showStopConfirm = true }
