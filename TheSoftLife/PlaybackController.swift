@@ -20,6 +20,9 @@ final class PlaybackController: NSObject {
     private let synthQueue = OperationQueue()
     private var player = AVQueuePlayer()
     private var itemEndObserver: Any?
+    // Session state
+    private var lastEnqueuedItem: AVPlayerItem?
+
 
     // Session state
     private var currentMode: PlaybackMode = .sequential
@@ -148,6 +151,7 @@ final class PlaybackController: NSObject {
         player.removeAllItems()
         player = AVQueuePlayer()
         player.automaticallyWaitsToMinimizeStalling = false
+        lastEnqueuedItem = nil
 
         processedCount = 0
         totalCount = 0
@@ -172,35 +176,64 @@ final class PlaybackController: NSObject {
         delegate?.playbackController(self, didUpdateProgress: 0, total: totalCount)
         delegate?.playbackController(self, didUpdateStatus: "Rendering 1/\(totalCount)…")
 
+        let group = DispatchGroup()
+
+        // First file
+        group.enter()
         let first = files[0]
-        synthOne(fileURL: first) { [weak self] audioURL in
-            guard let self else { return }
-            self.enqueueAndMaybePlay(audioURL)
-            self.delegate?.playbackController(self, didStartPlaying: first.deletingPathExtension().lastPathComponent)
+        synthOne(fileURL: first) { [weak self] maybeURL in
+            guard let self = self else { group.leave(); return }
+            // Completion should already be on main
+
+            if let url = maybeURL {
+                self.enqueueAndMaybePlay(url)
+                self.delegate?.playbackController(self,
+                    didStartPlaying: first.deletingPathExtension().lastPathComponent)
+                self.delegate?.playbackControllerDidPlay(self)
+            } else {
+                print("⚠️ First file produced no audio, skipping.")
+            }
+
             self.processedCount = 1
-            self.delegate?.playbackController(self, didUpdateProgress: self.processedCount, total: self.totalCount)
-            self.delegate?.playbackController(self, didUpdateStatus: "Rendered \(self.processedCount)/\(self.totalCount).")
-            self.delegate?.playbackControllerDidPlay(self)
+            self.delegate?.playbackController(self,
+                didUpdateProgress: self.processedCount, total: self.totalCount)
+            self.delegate?.playbackController(self,
+                didUpdateStatus: "Rendered \(self.processedCount)/\(self.totalCount).")
+            group.leave()
         }
 
+
         for (idx, file) in files.dropFirst().enumerated() {
-            synthQueue.addOperation { [weak self] in
-                guard let self else { return }
-                self.synthOne(fileURL: file) { url in
-                    DispatchQueue.main.async {
-                        self.enqueueAndMaybePlay(url)
-                        self.processedCount = idx + 2
-                        self.delegate?.playbackController(self, didUpdateProgress: self.processedCount, total: self.totalCount)
-                        if self.processedCount == self.totalCount {
-                            self.delegate?.playbackController(self, didUpdateStatus: "All rendered.")
-                        } else {
-                            self.delegate?.playbackController(self, didUpdateStatus: "Rendering \(self.processedCount+1)/\(self.totalCount)…")
-                        }
-                    }
+            group.enter()
+            self.synthOne(fileURL: file) { [weak self] maybeURL in
+                guard let self = self else { group.leave(); return }
+                if let url = maybeURL {
+                    self.enqueueAndMaybePlay(url)
                 }
+                self.processedCount = idx + 2
+                self.delegate?.playbackController(self,
+                                                  didUpdateProgress: self.processedCount,
+                                                  total: self.totalCount)
+                if self.processedCount == self.totalCount {
+                    self.delegate?.playbackController(self, didUpdateStatus: "All rendered.")
+                } else {
+                    self.delegate?.playbackController(self,
+                                                      didUpdateStatus: "Rendering \(self.processedCount + 1)/\(self.totalCount)…")
+                }
+                group.leave()
             }
         }
+
+
+
+
+        // Append trailing silence ONLY after all enqueues have completed
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            self.enqueueSilence(seconds: 10.0)   // <- now guaranteed to be the true tail
+        }
     }
+
 
     // MARK: - Random Loop (infinite)
 
@@ -228,13 +261,27 @@ final class PlaybackController: NSObject {
 
     private func produceAndEnqueueRandomFile() {
         guard let file = files.randomElement() else { return }
-        synthOne(fileURL: file) { [weak self] url in
-            guard let self else { return }
-            self.enqueueAndMaybePlay(url)
-            self.delegate?.playbackController(self, didStartPlaying: file.deletingPathExtension().lastPathComponent)
-            self.delegate?.playbackControllerDidPlay(self)
+
+        synthOne(fileURL: file) { [weak self] maybeURL in
+            guard let self = self else { return }
+
+            if let url = maybeURL {
+                self.enqueueAndMaybePlay(url)
+                self.delegate?.playbackController(self,
+                                                  didStartPlaying: file.deletingPathExtension().lastPathComponent)
+                self.delegate?.playbackControllerDidPlay(self)
+            } else {
+                // Synthesis failed or file was empty — don't stall; try again soon.
+                print("⚠️ Random synth produced no audio for \(file.lastPathComponent); retrying shortly.")
+                if case .randomLoop(let minDelay, _, _) = self.currentMode {
+                    // Backoff a little; keep it snappy but not tight-looping.
+                    let backoff: TimeInterval = max(0.3, min(0.5, minDelay))
+                    self.scheduleNextRandom(after: backoff)
+                }
+            }
         }
     }
+
 
     // MARK: - Helpers shared
 
@@ -248,39 +295,71 @@ final class PlaybackController: NSObject {
         }
     }
 
+    private func enqueueSilence(seconds: TimeInterval) {
+        guard let url = SilenceFactory.url(for: seconds, in: cacheDir) else { return }
+        if let attrs = try? fm.attributesOfItem(atPath: url.path),
+           let sz = attrs[.size] as? NSNumber {
+            print("🎧 Silence ready:", url.lastPathComponent, "size=\(sz.intValue)")
+        }
+
+        let silenceItem = AVPlayerItem(url: url)
+        let after = lastEnqueuedItem ?? player.items().last
+
+        if player.canInsert(silenceItem, after: after) {
+            player.insert(silenceItem, after: after)
+            lastEnqueuedItem = silenceItem
+            let names = player.items().compactMap { ($0.asset as? AVURLAsset)?.url.lastPathComponent }
+            print("Enqueued (silence):", url.lastPathComponent, "| after:", (after != nil ? ((after!.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>") : "nil"), "| queue:", names)
+        } else {
+            // As a fallback, append at the end even if we couldn't read 'after'
+            player.insert(silenceItem, after: nil)
+            lastEnqueuedItem = silenceItem
+            print("⚠️ Inserted silence via fallback at tail.")
+        }
+
+        if player.timeControlStatus != .playing {
+            ensureActiveAudioSession()
+            player.playImmediately(atRate: 1.0)
+        }
+    }
+
+
+
     private func ensureActiveAudioSession() {
         do { try AVAudioSession.sharedInstance().setActive(true) }
         catch { print("setActive(true) failed: \(error)") }
     }
 
-    private func enqueueAndMaybePlay(_ url: URL) {
+    @discardableResult
+    private func enqueueAndMaybePlay(_ url: URL) -> AVPlayerItem? {
         let item = AVPlayerItem(url: url)
+        let after = lastEnqueuedItem ?? player.items().last
 
-        // Append after current tail
-        let tail = player.items().last
-        if player.canInsert(item, after: tail) {
-            player.insert(item, after: tail)
+        var inserted = false
+        if player.canInsert(item, after: after) {
+            player.insert(item, after: after)
+            inserted = true
+        } else if after == nil {
+            player.insert(item, after: nil) // empty queue
+            inserted = true
+        }
+
+        if inserted {
+            lastEnqueuedItem = item
+            let names = player.items().compactMap { ($0.asset as? AVURLAsset)?.url.lastPathComponent }
+            print("Enqueued:", (url.lastPathComponent), "| after:", (after != nil ? ((after!.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>") : "nil"), "| queue:", names)
         } else {
-            player.insert(item, after: nil) // empty queue fallback
+            print("⚠️ Failed to insert:", url.lastPathComponent, "after:", (after != nil ? ((after!.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>") : "nil"))
+            return nil
         }
 
-        // If this was the first item, observe readiness
-        if player.items().count == 1 {
-            attachItemReadyObserver(item)
-        }
-
-        // Debug (optional)
-        // debugListQueue("After enqueue")
-
-        // Kick off playback if idle
         if player.timeControlStatus != .playing {
             ensureActiveAudioSession()
             player.playImmediately(atRate: 1.0)
-            print("▶️ Started playback. status=\(player.timeControlStatus.rawValue) rate=\(player.rate)")
+            print("▶️ Started/resumed. status=\(player.timeControlStatus.rawValue) rate=\(player.rate)")
         }
+        return item
     }
-
-
 
     private func observePlaybackEnd() {
         itemEndObserver = NotificationCenter.default.addObserver(
@@ -347,32 +426,30 @@ final class PlaybackController: NSObject {
         return filtered.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
 
-    private func synthOne(fileURL: URL, completion: @escaping (URL) -> Void) {
-        guard let settings = settings else { return }
+    private func synthOne(fileURL: URL, completion: @escaping (URL?) -> Void) {
         let raw = (try? Self.extractText(from: fileURL)) ?? ""
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty else {
+            completion(nil)     // always complete, even when skipping
+            return
+        }
 
-        // write into cache with unique name (avoid collisions)
         let base = fileURL.deletingPathExtension().lastPathComponent
         let uniq = UUID().uuidString.prefix(8)
         let outURL = cacheDir.appendingPathComponent("\(base)-\(uniq).m4a")
 
         TTSSynthesizer.shared.synthesizeToFile(
             text: text,
-            languageCode: settings.languageCode,
-            voiceIdentifier: settings.voiceIdentifier,
-            rate: settings.rate,
-            pitch: settings.pitch,
+            languageCode: settings?.languageCode ?? "en-US",
+            voiceIdentifier: settings?.voiceIdentifier,
+            rate: settings?.rate ?? 0.3,
+            pitch: settings?.pitch ?? 1.0,
             outputURL: outURL
         ) { success in
-            if success {
-                print("✅ Synth OK →", outURL.lastPathComponent)
-                self.debugListCache()            // <— add this
-                completion(outURL)
-            }
+            completion(success ? outURL : nil)  // always complete
         }
     }
+
 
     private static func extractText(from url: URL) throws -> String {
         if url.pathExtension.lowercased() == "txt" {
