@@ -3,6 +3,10 @@ import UniformTypeIdentifiers
 
 import CoreMedia
 
+import CoreMedia
+
+
+
 protocol PlaybackControllerDelegate: AnyObject {
     func playbackController(_ c: PlaybackController, didUpdateStatus text: String)
     func playbackController(_ c: PlaybackController, didUpdateProgress processed: Int, total: Int)
@@ -34,6 +38,7 @@ final class PlaybackController: NSObject {
     
     private var timeObs: NSKeyValueObservation?
     private var itemStatusObs: NSKeyValueObservation?
+    private var itemFailObserver: Any?
 
 
     // Random loop
@@ -58,10 +63,70 @@ final class PlaybackController: NSObject {
             }
         }
         
+        itemFailObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: nil,
+            queue: .main
+        ) { [weak self] n in
+            guard let self, let item = n.object as? AVPlayerItem else { return }
+            self.logItemFailure(item, where: "FailedToPlayToEndTime")
+        }
+        
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         observePlaybackEnd()
         configureAudioSession()
     }
+    
+    private func itemName(_ item: AVPlayerItem?) -> String {
+        guard let u = (item?.asset as? AVURLAsset)?.url else { return "nil" }
+        return u.lastPathComponent
+    }
+
+    private func logItemFailure(_ item: AVPlayerItem, where context: String) {
+        let name = (item.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>"
+        print("❌ AVPlayerItem failed (\(context)): \(name) — \(item.error?.localizedDescription ?? "no item.error")")
+        if let el = item.errorLog() {
+            for ev in el.events {
+                print("   ⋯ errorLog: status=\(ev.errorStatusCode) '\(ev.errorComment ?? "")' server=\(ev.serverAddress ?? "—")")
+            }
+        }
+    }
+
+
+    private func dumpQueue(_ label: String) {
+        let items = player.items()
+        for it in items {
+            let nm = (it.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>"
+            let d  = CMTimeGetSeconds(it.asset.duration)
+            let dur = d.isFinite ? String(format: "%.2fs", d) : "indef"
+            print("  \(it === player.currentItem ? "◀︎" : " ") \(nm)  dur=\(dur)  status=\(it.status.rawValue)")
+            if it.status == .failed { logItemFailure(it, where: "dumpQueue") }
+        }
+        let names = items.compactMap { ($0.asset as? AVURLAsset)?.url.lastPathComponent }
+        // mark current item in the list
+        let marked = items.enumerated().map { idx, it -> String in
+            let name = (it.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>"
+            return (it === player.currentItem ? "◀︎ " : "  ") + "[\(idx)] " + name
+        }
+
+        let durStr: (AVPlayerItem) -> String = { it in
+            let d = CMTimeGetSeconds(it.asset.duration)
+            return d.isFinite ? String(format: "%.2fs", d) : "indef"
+        }
+
+        print("━━━━━━━━ QUEUE @ \(label) ━━━━━━━━")
+        print("currentItem:", itemName(player.currentItem),
+              "| timeControl:", player.timeControlStatus.rawValue,
+              "| rate:", player.rate,
+              "| count:", items.count)
+        for it in items {
+            let nm = (it.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>"
+            print("  \(it === player.currentItem ? "◀︎" : " ") \(nm)  dur=\(durStr(it))  status=\(it.status.rawValue)")
+        }
+        if names.isEmpty { print("  (empty)") }
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    }
+
 
     private func resumeIfNeeded(_ context: String) {
         guard player.currentItem != nil, player.timeControlStatus != .playing else { return }
@@ -82,6 +147,7 @@ final class PlaybackController: NSObject {
     deinit {
         randomTimer?.invalidate()
         if let o = itemEndObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = itemFailObserver { NotificationCenter.default.removeObserver(o) }
     }
     
     private func debugListCache() {
@@ -230,7 +296,7 @@ final class PlaybackController: NSObject {
         // Append trailing silence ONLY after all enqueues have completed
         group.notify(queue: .main) { [weak self] in
             guard let self else { return }
-            self.enqueueSilence(seconds: 10.0)   // <- now guaranteed to be the true tail
+            self.enqueueSilence(seconds: 3.0)   // <- now guaranteed to be the true tail
         }
     }
 
@@ -297,31 +363,11 @@ final class PlaybackController: NSObject {
 
     private func enqueueSilence(seconds: TimeInterval) {
         guard let url = SilenceFactory.url(for: seconds, in: cacheDir) else { return }
-        if let attrs = try? fm.attributesOfItem(atPath: url.path),
-           let sz = attrs[.size] as? NSNumber {
-            print("🎧 Silence ready:", url.lastPathComponent, "size=\(sz.intValue)")
-        }
-
-        let silenceItem = AVPlayerItem(url: url)
-        let after = lastEnqueuedItem ?? player.items().last
-
-        if player.canInsert(silenceItem, after: after) {
-            player.insert(silenceItem, after: after)
-            lastEnqueuedItem = silenceItem
-            let names = player.items().compactMap { ($0.asset as? AVURLAsset)?.url.lastPathComponent }
-            print("Enqueued (silence):", url.lastPathComponent, "| after:", (after != nil ? ((after!.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>") : "nil"), "| queue:", names)
-        } else {
-            // As a fallback, append at the end even if we couldn't read 'after'
-            player.insert(silenceItem, after: nil)
-            lastEnqueuedItem = silenceItem
-            print("⚠️ Inserted silence via fallback at tail.")
-        }
-
-        if player.timeControlStatus != .playing {
-            ensureActiveAudioSession()
-            player.playImmediately(atRate: 1.0)
-        }
+        print("🎧 Silence ready:", url.lastPathComponent)
+        _ = enqueueAndMaybePlay(url)
+        dumpQueue("after enqueue SILENCE")
     }
+
 
 
 
@@ -333,25 +379,12 @@ final class PlaybackController: NSObject {
     @discardableResult
     private func enqueueAndMaybePlay(_ url: URL) -> AVPlayerItem? {
         let item = AVPlayerItem(url: url)
-        let after = lastEnqueuedItem ?? player.items().last
+        let tail = player.items().last
+        if player.canInsert(item, after: tail) { player.insert(item, after: tail) }
+        else { player.insert(item, after: nil) }
 
-        var inserted = false
-        if player.canInsert(item, after: after) {
-            player.insert(item, after: after)
-            inserted = true
-        } else if after == nil {
-            player.insert(item, after: nil) // empty queue
-            inserted = true
-        }
-
-        if inserted {
-            lastEnqueuedItem = item
-            let names = player.items().compactMap { ($0.asset as? AVURLAsset)?.url.lastPathComponent }
-            print("Enqueued:", (url.lastPathComponent), "| after:", (after != nil ? ((after!.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>") : "nil"), "| queue:", names)
-        } else {
-            print("⚠️ Failed to insert:", url.lastPathComponent, "after:", (after != nil ? ((after!.asset as? AVURLAsset)?.url.lastPathComponent ?? "<?>") : "nil"))
-            return nil
-        }
+        print("Enqueued:", url.lastPathComponent, "after:", itemName(tail))
+        dumpQueue("after enqueue \(url.lastPathComponent)")
 
         if player.timeControlStatus != .playing {
             ensureActiveAudioSession()
@@ -361,44 +394,49 @@ final class PlaybackController: NSObject {
         return item
     }
 
+
     private func observePlaybackEnd() {
         itemEndObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: nil,
-            queue: .main
+            forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main
         ) { [weak self] n in
             guard let self else { return }
+            
+            if let cur = player.currentItem, cur.status == .failed {
+                logItemFailure(cur, where: "after advance")
+            }
 
             if let ended = n.object as? AVPlayerItem,
                let url = (ended.asset as? AVURLAsset)?.url {
                 print("✅ Finished:", url.lastPathComponent)
                 self.deleteIfInCache(url)
-
-                // If the finished item is still at head, force-advance
-                if self.player.items().first === ended {
-                    self.player.advanceToNextItem()
-                }
             }
 
-            // If there’s a next item, observe its readiness and resume
-            if let next = self.player.items().first {
-                self.attachItemReadyObserver(next)
-                self.resumeIfNeeded("end-of-item")
+            dumpQueue("on end BEFORE advance")
 
-                // Extra tiny nudge for timing races
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    self.resumeIfNeeded("post-advance nudge")
-                }
-            } else {
-                // Queue empty (sequential)
-                self.delegate?.playbackController(self, didUpdateStatus: "Finished all.")
-                self.delegate?.playbackControllerDidPause(self)
+            if let ended = n.object as? AVPlayerItem,
+               self.player.items().first === ended {
+                print("advanceToNextItem() because head ended")
+                self.player.advanceToNextItem()
             }
 
-            // Random-loop scheduling is unchanged
+            dumpQueue("on end AFTER advance")
+
+            // Random loop schedule (unchanged)
             if case .randomLoop(let minDelay, let maxDelay, _) = self.currentMode {
                 let delay = Double.random(in: minDelay...maxDelay)
                 self.scheduleNextRandom(after: delay)
+                return
+            }
+
+            // Sequential: if queue not empty, make sure it’s running
+            if !self.player.items().isEmpty {
+                self.ensureActiveAudioSession()
+                self.player.playImmediately(atRate: 1.0)
+                print("▶️ Nudge play after end")
+                dumpQueue("after nudge")
+            } else {
+                self.delegate?.playbackController(self, didUpdateStatus: "Finished all.")
+                self.delegate?.playbackControllerDidPause(self)
             }
         }
     }
@@ -429,14 +467,13 @@ final class PlaybackController: NSObject {
     private func synthOne(fileURL: URL, completion: @escaping (URL?) -> Void) {
         let raw = (try? Self.extractText(from: fileURL)) ?? ""
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            completion(nil)     // always complete, even when skipping
-            return
-        }
+        guard !text.isEmpty else { completion(nil); return }
 
         let base = fileURL.deletingPathExtension().lastPathComponent
         let uniq = UUID().uuidString.prefix(8)
-        let outURL = cacheDir.appendingPathComponent("\(base)-\(uniq).m4a")
+        // NOTE: you're currently writing PCM buffers. .caf is the correct container for PCM.
+        // If you insist on .m4a here, many files will be rejected as "Cannot Open".
+        let outURL = cacheDir.appendingPathComponent("\(base)-\(uniq).caf") // <- safer than .m4a
 
         TTSSynthesizer.shared.synthesizeToFile(
             text: text,
@@ -446,7 +483,47 @@ final class PlaybackController: NSObject {
             pitch: settings?.pitch ?? 1.0,
             outputURL: outURL
         ) { success in
-            completion(success ? outURL : nil)  // always complete
+            guard success else { completion(nil); return }
+            self.validatePlayableAsset(url: outURL, retries: 6, delay: 0.08) { ok in
+                completion(ok ? outURL : nil)
+            }
+        }
+    }
+
+    // MARK: - Playability validation with tiny retry
+    private func validatePlayableAsset(url: URL,
+                                       retries: Int,
+                                       delay: TimeInterval,
+                                       completion: @escaping (Bool) -> Void) {
+        let asset = AVURLAsset(url: url)
+        asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) {
+            var err: NSError?
+            let playableStatus = asset.statusOfValue(forKey: "playable", error: &err)
+            let durationStatus = asset.statusOfValue(forKey: "duration", error: &err)
+            let dur = CMTimeGetSeconds(asset.duration)
+            let ok = (playableStatus == .loaded && asset.isPlayable) &&
+                     (durationStatus == .loaded && dur > 0.05)
+
+            if ok {
+                DispatchQueue.main.async {
+                    print("✅ Asset OK:", url.lastPathComponent, String(format: "dur=%.2fs", dur))
+                    completion(true)
+                }
+            } else if retries > 0 {
+                // A tiny backoff covers the occasional “metadata not ready yet” blip.
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    self.validatePlayableAsset(url: url, retries: retries - 1, delay: min(delay * 1.6, 0.5), completion: completion)
+                }
+            } else {
+                DispatchQueue.main.async {
+                    print("⚠️ Asset NOT playable, skipping:", url.lastPathComponent,
+                          "playableStatus=\(playableStatus.rawValue)",
+                          "durationStatus=\(durationStatus.rawValue)",
+                          String(format: "dur=%.2f", dur),
+                          "error=\(err?.localizedDescription ?? "nil")")
+                    completion(false)
+                }
+            }
         }
     }
 
