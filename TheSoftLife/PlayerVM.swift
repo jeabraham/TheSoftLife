@@ -32,15 +32,16 @@ final class PlayerVM: NSObject, ObservableObject {
 
     func reloadVoices() {
         voices = AVSpeechSynthesisVoice.speechVoices()
+        print("Reloaded voices: count=\(voices.count)")
+        for v in voices { print("Voice: \(v.name) | id=\(v.identifier) | lang=\(v.language) | quality=\(v.quality.rawValue)") }
     }
 
-    
     private let bookmarkKey = "chosenFolderBookmark"
 
     override init() {
         synthQueue.maxConcurrentOperationCount = 1
         super.init()
-        player.automaticallyWaitsToMinimizeStalling = false // PATCH: start immediately
+        player.automaticallyWaitsToMinimizeStalling = false
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         configureAudioSession()
         restoreBookmarkedFolderIfAny()
@@ -56,17 +57,17 @@ final class PlayerVM: NSObject, ObservableObject {
     func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            // Allow Bluetooth (A2DP/LE) and AirPlay; do NOT default to speaker.
             try session.setCategory(.playback,
                                     mode: .default,
                                     options: [.allowBluetooth, .allowAirPlay])
             try session.setActive(true)
             print("AVAudioSession: category=\(session.category.rawValue) mode=\(session.mode.rawValue)")
+            let route = session.currentRoute
+            print("Audio route outputs:", route.outputs.map { $0.portType.rawValue })
         } catch {
             print("Audio session error: \(error)")
         }
     }
-
 
     func pickFolder(presenter: UIViewController) {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
@@ -106,7 +107,6 @@ final class PlayerVM: NSObject, ObservableObject {
         synthOne(fileURL: first) { [weak self] audioURL in
             guard let self else { return }
             self.enqueueAndMaybePlay(audioURL)
-            // PATCH: update name as soon as item becomes current
             self.currentFileName = first.deletingPathExtension().lastPathComponent
             self.isPlaying = true
             self.processedFiles += 1
@@ -163,7 +163,7 @@ final class PlayerVM: NSObject, ObservableObject {
     private func stopSession(resetUIOnly: Bool) {
         player.pause()
         player.removeAllItems()
-        player = AVQueuePlayer() // PATCH: fresh player after stop
+        player = AVQueuePlayer()
         player.automaticallyWaitsToMinimizeStalling = false
 
         if !resetUIOnly {
@@ -185,13 +185,15 @@ final class PlayerVM: NSObject, ObservableObject {
     }
 
     private func enqueueAndMaybePlay(_ audioURL: URL) {
+        print("Enqueue: \(audioURL.lastPathComponent)")
+        print("Queue count before: \(player.items().count)")
+        
         let item = AVPlayerItem(url: audioURL)
 
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] n in
             guard let self, let urlAsset = (n.object as? AVPlayerItem)?.asset as? AVURLAsset else { return }
-            // PATCH: when an item ends, advance displayed name to the next item if any
             if let next = self.player.items().first,
                let nextAsset = next.asset as? AVURLAsset {
                 self.currentFileName = nextAsset.url.deletingPathExtension().lastPathComponent
@@ -203,15 +205,19 @@ final class PlayerVM: NSObject, ObservableObject {
         player.insert(item, after: nil)
         canControlPlayback = true
 
-        // If nothing was playing, start immediately
+        print("Queue count after: \(player.items().count)")
         if player.timeControlStatus != .playing {
             ensureActiveAudioSession()
             player.playImmediately(atRate: 1.0)
+            print("Attempted to playImmediately")
             isPlaying = true
-            // PATCH: set current file name when first item actually starts
             if let asset = item.asset as? AVURLAsset {
                 currentFileName = asset.url.deletingPathExtension().lastPathComponent
             }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            print("Player status: \(self.player.timeControlStatus.rawValue) rate=\(self.player.rate) currentItem=\(String(describing: (self.player.currentItem?.asset as? AVURLAsset)?.url.lastPathComponent))")
         }
     }
 
@@ -242,7 +248,6 @@ final class PlayerVM: NSObject, ObservableObject {
         let baseName = fileURL.deletingPathExtension().lastPathComponent
         let outURL = cacheDir.appendingPathComponent("\(baseName).m4a")
 
-        // PATCH: if file is empty, skip but keep progress flowing
         guard !text.isEmpty else {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -258,6 +263,10 @@ final class PlayerVM: NSObject, ObservableObject {
                                                rate: rate,
                                                pitch: pitch,
                                                outputURL: outURL) { success in
+            print("Synth finished → \(outURL.lastPathComponent), success=\(success)")
+            if let attrs = try? self.fm.attributesOfItem(atPath: outURL.path) {
+                print("File size:", attrs[.size] ?? "nil")
+            }
             if success { completion(outURL) }
         }
     }
@@ -289,54 +298,70 @@ extension PlayerVM: UIDocumentPickerDelegate {
 extension PlayerVM {
     var languagesAvailable: [String] {
         let langs = Set(voices.map { $0.language })
-        // put current language first
         return [languageCode] + langs.filter { $0 != languageCode }.sorted()
     }
-
+    
     var voicesForSelectedLanguage: [AVSpeechSynthesisVoice] {
         voices
             .filter { $0.language == languageCode }
             .sorted { lhs, rhs in
-                (qualityRank(lhs.quality), lhs.name) < (qualityRank(rhs.quality), rhs.name)
+                (qualityRank(lhs.quality.rawValue), lhs.name) <
+                    (qualityRank(rhs.quality.rawValue), rhs.name)
             }
     }
-
-    private func qualityRank(_ q: AVSpeechSynthesisVoiceQuality) -> Int {
+    
+    
+    private func qualityRank(_ q: Int) -> Int {
         switch q {
-        case .premium: return 0
-        case .enhanced: return 1
+        case AVSpeechSynthesisVoiceQuality.premium.rawValue: return 0
+        case AVSpeechSynthesisVoiceQuality.enhanced.rawValue: return 1
         default: return 2
         }
     }
-
+    
+    
     func refreshDefaultVoiceIfNeeded() {
-        // Keep explicit choice if it still exists
         if let id = voiceIdentifier, AVSpeechSynthesisVoice(identifier: id) != nil { return }
-
+        
         // 1) Stephanie (Enhanced) en-GB
-        if let steph = voices.first(where: { $0.name == "Stephanie" && $0.language.hasPrefix("en-GB") && $0.quality == .enhanced }) {
+        if let steph = voices.first(where: {
+            $0.name == "Stephanie" &&
+            $0.language.hasPrefix("en-GB") &&
+            $0.quality == .enhanced
+        }) {
             languageCode = steph.language
             voiceIdentifier = steph.identifier
             return
         }
+        
         // 2) Zoe (Premium) en-US
-        if let zoe = voices.first(where: { $0.name == "Zoe" && $0.language.hasPrefix("en-US") && $0.quality == .premium }) {
+        if let zoe = voices.first(where: {
+            $0.name == "Zoe" &&
+            $0.language.hasPrefix("en-US") &&
+            $0.quality == .premium
+        }) {
             languageCode = zoe.language
             voiceIdentifier = zoe.identifier
             return
         }
+        
         // 3) Any Enhanced en-GB
-        if let enGBEnh = voices.first(where: { $0.language.hasPrefix("en-GB") && $0.quality == .enhanced }) {
+        if let enGBEnh = voices.first(where: {
+            $0.language.hasPrefix("en-GB") &&
+            $0.quality == .enhanced
+        }) {
             languageCode = enGBEnh.language
             voiceIdentifier = enGBEnh.identifier
             return
         }
+        
         // 4) Any en-GB
         if let enGBAny = voices.first(where: { $0.language.hasPrefix("en-GB") }) {
             languageCode = enGBAny.language
             voiceIdentifier = enGBAny.identifier
             return
         }
+        
         // 5) Fallback
         if let first = voices.first {
             languageCode = first.language
@@ -344,14 +369,14 @@ extension PlayerVM {
         }
     }
 }
-
-// Utility to format a voice's display label with quality
-extension AVSpeechSynthesisVoice {
-    var qualityLabel: String {
-        switch quality {
-        case .premium: return "Premium"
-        case .enhanced: return "Enhanced"
-        default: return "Default"
+    
+    extension AVSpeechSynthesisVoice {
+        var qualityLabel: String {
+            switch quality {
+            case .premium:  return "Premium"
+            case .enhanced: return "Enhanced"
+            default:        return "Default"
+            }
         }
     }
-}
+    

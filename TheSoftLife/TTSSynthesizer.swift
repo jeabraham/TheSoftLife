@@ -41,10 +41,15 @@ final class TTSSynthesizer: NSObject, AVSpeechSynthesizerDelegate {
                     print("Write error: \(error)")
                 }
             } else {
-                DispatchQueue.main.async {
-                    completion(succeeded)
+                    // End marker: finish and callback
+                    if let attrs = try? FileManager.default.attributesOfItem(atPath: outputURL.path) {
+                        print("Synthesized file size:", attrs[.size] ?? "nil")
+                    }
+                    DispatchQueue.main.async {
+                        completion(succeeded)
+                    }
                 }
-            }
+
         }
     }
 }
