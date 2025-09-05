@@ -11,7 +11,7 @@ enum ExplicitOverBedRenderer {
         var bedBaseGain: Float = 0.95
         /// Multiplier applied to the bed **while** speech is present (ducking).
         /// e.g. 0.35 means ~−9 dB when the foreground is active.
-        var bedDuckWhileSpeech: Float = 0.02
+        var bedDuckWhileSpeech: Float = 0.9
         /// Threshold to consider "speech present" on the foreground (linear).
         var speechDetectAbsThreshold: Float = 0.001
         /// Fade length at start/end of fg & duck transitions (seconds).
@@ -89,11 +89,11 @@ enum ExplicitOverBedRenderer {
 
     // MARK: - Mixing (offline)
 
-    private static func offlineMix(fgURL: URL,
-                                   bedURL: URL,
-                                   outURL: URL,
-                                   options: MixOptions,
-                                   completion: @escaping (Bool) -> Void)
+private static func offlineMix(fgURL: URL,
+                       bedURL: URL,
+                       outURL: URL,
+                       options: MixOptions,
+                       completion: @escaping (Bool) -> Void)
     {
         do {
             let sr: Double = 44_100

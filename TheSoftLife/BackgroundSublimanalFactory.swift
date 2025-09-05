@@ -16,7 +16,7 @@ enum BackgroundSubliminalFactory {
     static var enableSubliminals = true
     
     /// Subliminal level relative to full scale (linear). -24 dB ≈ 0.063
-    static var subliminalGain: Float = 0.08
+    static var subliminalGain: Float = 0.06
     
     /// Interval between subliminals (seconds, inclusive range)
     static var subliminalIntervalRange: ClosedRange<Double> = 1.0...5.0

@@ -725,13 +725,7 @@ final class PlaybackController: NSObject {
                     fgURL: outURL,
                     bedURL: bedURL,
                     outURL: tmpURL,
-                    options: .init(
-                        fgGain: 1.0,
-                        bedBaseGain: 1.0,
-                        bedDuckWhileSpeech: 0.35,   // try 0.25–0.45
-                        speechDetectAbsThreshold: 0.0015,
-                        fadeSeconds: 0.008
-                    )
+                    options: ExplicitOverBedRenderer.MixOptions() // use the default options
                 ) { ok in
                     guard ok else { completion(nil); return }
 
