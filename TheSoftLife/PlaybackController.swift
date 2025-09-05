@@ -190,7 +190,8 @@ final class PlaybackController: NSObject {
             // If you later add the hybrid path (notification for long gaps),
             // branch here on `gap` vs `shortGapThreshold`. For now we always enqueue silence.
             if gap <= shortGapThreshold {
-                if let sURL = SilenceFactory.url(for: gap, in: self.cacheDir) {
+                // TODO we should allow the user to choose subliminal or silence.
+                if let sURL = BackgroundSubliminalFactory.url(for: gap, in: self.cacheDir) {
                     self.enqueueAfter(item: speechItem, url: sURL)
                 }   else {
                     // If silence creation failed, at least keep the buffer growing by scheduling the next pair.
