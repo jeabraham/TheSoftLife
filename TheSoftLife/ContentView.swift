@@ -39,6 +39,7 @@ struct ContentView: View {
                 Divider()
                 randomControls
                 Spacer()
+                AudioSettingsView()
                 
                 Button("Voice & Speech…") { showVoiceSheet = true }
                     .buttonStyle(.borderedProminent)
@@ -162,6 +163,26 @@ struct ContentView: View {
             .first?.keyWindow?.rootViewController else { return }
         vm.pickFolder(presenter: root)
     }
+    
+    struct AudioSettingsView: View {
+        // This key lives in UserDefaults automatically
+        @AppStorage("subliminalBackgrounds") private var subliminalBackgrounds: Bool = false
+
+        var body: some View {
+            //Form {
+                //Section(header: Text("Audio Backgrounds")) {
+                    Toggle("Subliminal backgrounds", isOn: $subliminalBackgrounds)
+                        .onChange(of: subliminalBackgrounds) { on in
+                            print("[Settings] subliminalBackgrounds →", on)
+                        }
+                    //Text("Adds low-level noise + subliminals between files and behind explicit narration.")
+                    //    .font(.footnote)
+                    //    .foregroundColor(.secondary)
+                //}
+            //}
+            //.navigationTitle("Audio")
+        }
+    }
 
     @ViewBuilder
     private var randomControls: some View {
@@ -238,9 +259,9 @@ private func vmQualityRank(_ q: AVSpeechSynthesisVoiceQuality) -> Int {
 
 
 enum AppAudioSettings {
-    private static let key = "backgroundsBehindFiles"
+    private static let key = "subliminalBackgrounds"
 
-    static var backgroundsBehindFiles: Bool {
+    static var subliminalBackgrounds: Bool {
         get { UserDefaults.standard.bool(forKey: key) }
         set { UserDefaults.standard.set(newValue, forKey: key) }
     }

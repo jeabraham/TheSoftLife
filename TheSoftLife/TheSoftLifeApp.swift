@@ -9,12 +9,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             print("Build finished:", result)
         }
 
-        if UserDefaults.standard.object(forKey: "backgroundsBehindFiles") == nil {
-            AppAudioSettings.backgroundsBehindFiles = false
+        if UserDefaults.standard.object(forKey: "subliminalBackgrounds") == nil {
+            AppAudioSettings.subliminalBackgrounds = false
         }
 
         // For testing
-        AppAudioSettings.backgroundsBehindFiles = true
+        AppAudioSettings.subliminalBackgrounds = false
         return true
         
         // Called when user taps a notification or action

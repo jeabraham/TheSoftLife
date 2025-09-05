@@ -188,12 +188,23 @@ final class PlaybackController: NSObject {
             // If you later add the hybrid path (notification for long gaps),
             // branch here on `gap` vs `shortGapThreshold`. For now we always enqueue silence.
             if gap <= shortGapThreshold {
-                // TODO we should allow the user to choose subliminal or silence.
-                if let sURL = BackgroundSubliminalFactory.url(for: gap, in: self.cacheDir) {
-                    self.enqueueAfter(item: speechItem, url: sURL)
-                }   else {
-                    // If silence creation failed, at least keep the buffer growing by scheduling the next pair.
-                    print("⚠️ Failed to create silence; continuing without a gap after \(displayName)")
+                
+                if AppAudioSettings.subliminalBackgrounds == true {
+                    // TODO we should allow the user to choose subliminal or silence.
+                    if let sURL = BackgroundSubliminalFactory.url(for: gap, in: self.cacheDir) {
+                        self.enqueueAfter(item: speechItem, url: sURL)
+                    }   else {
+                        // If silence creation failed, at least keep the buffer growing by scheduling the next pair.
+                        print("⚠️ Failed to create silence; continuing without a gap after \(displayName)")
+                    }
+                } else {
+                    // TODO we should allow the user to choose subliminal or silence.
+                    if let sURL = SilenceFactory.url(for: gap, in: self.cacheDir) {
+                        self.enqueueAfter(item: speechItem, url: sURL)
+                    }   else {
+                        // If silence creation failed, at least keep the buffer growing by scheduling the next pair.
+                        print("⚠️ Failed to create silence; continuing without a gap after \(displayName)")
+                    }
                 }
             } else {
                 self.planGapAndNextFile() // the helper we outlined earlier
@@ -698,13 +709,13 @@ final class PlaybackController: NSObject {
                 guard ok else { completion(nil); return }
 
                 // If we’re not layering, just return the foreground as-is.
-                guard AppAudioSettings.backgroundsBehindFiles == true else {
-                    print("[ExplicitOverBed] backgroundsBehindFiles=OFF → returning TTS only")
+                guard AppAudioSettings.subliminalBackgrounds == true else {
+                    print("[ExplicitOverBed] subliminalBackgrounds=OFF → returning TTS only")
                     completion(outURL)
                     return
                 }
 
-                // backgroundsBehindFiles = true → render bed, duck it, and mix overtop
+                // subliminalBackgrounds = true → render bed, duck it, and mix overtop
                 let outDirectory = outURL.deletingLastPathComponent()
                 let fgAsset = AVURLAsset(url: outURL)
                 let fgDur = max(0.25, CMTimeGetSeconds(fgAsset.duration))
