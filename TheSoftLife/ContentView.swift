@@ -2,10 +2,21 @@ import SwiftUI
 import UIKit
 import AVFoundation   // <-- add this
 
+fileprivate func formatRange(_ lo: Double, _ hi: Double) -> String {
+    func fmt(_ s: Double) -> String {
+        if s >= 120 { return "\(Int(s/60))m" }
+        if s >= 60  { return "1m \(Int(s.truncatingRemainder(dividingBy: 60)))s" }
+        return "\(Int(s))s"
+    }
+    return "\(fmt(lo))–\(fmt(hi))"
+}
+
+// ContentView.swift
 
 struct ContentView: View {
     @EnvironmentObject var vm: PlayerVM
-    
+    @State private var showVoiceSheet = false   // <- add this
+
     var body: some View {
         NavigationView {
             VStack(alignment: .leading, spacing: 16) {
@@ -15,29 +26,32 @@ struct ContentView: View {
                     Text(vm.statusText).font(.subheadline).foregroundColor(.secondary)
                     ProgressView(value: Double(vm.processedFiles), total: Double(max(vm.totalFiles, 1)))
                 }
-                .font(.headline)
-                
+                .font(.headline)                // … your header / status UI …
+
                 HStack(spacing: 12) {
                     Button("Choose Folder") { presentFolderPicker() }
                     Button(vm.isPlaying ? "Pause" : "Resume") { vm.pauseResume() }
                         .disabled(!vm.canControlPlayback)
-                    
                     Button("Stop") { vm.stopTapped() }
                         .disabled(!vm.canControlPlayback)
-                    
                 }
-                Button("Start Random (5–20s)") {
-                    vm.randomLoopEnabled = true
-                    vm.minDelaySec = 5
-                    vm.maxDelaySec = 20
-                    vm.startSession()
-                }
+
                 Divider()
-                settings
+                randomControls
+                Spacer()
+                
+                Button("Voice & Speech…") { showVoiceSheet = true }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 8)
+
                 Spacer()
             }
             .padding()
             .navigationTitle("The Soft Life")
+            .sheet(isPresented: $showVoiceSheet) {
+                VoiceSettingsView()
+                    .environmentObject(vm) // pass the same VM
+            }
             .alert("Stop playback?", isPresented: $vm.showStopConfirm) {
                 Button("Cancel", role: .cancel) {}
                 Button("Stop", role: .destructive) { vm.stopConfirmed() }
@@ -49,13 +63,18 @@ struct ContentView: View {
                     RoutePicker().frame(width: 28, height: 28)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Start") { vm.startSession() }
-                        .disabled(vm.folderURL == nil)
+                    Button(vm.randomLoopEnabled
+                           ? "Start Random (\(Int(vm.minDelaySec))–\(Int(vm.maxDelaySec))s)"
+                           : "Start") {
+                        vm.startSession()
+                    }
+                    .disabled(vm.folderURL == nil)
                 }
             }
         }
     }
-    
+
+     
     @ViewBuilder
     private var settings: some View {
         // Precompute to help the type-checker
@@ -144,7 +163,57 @@ struct ContentView: View {
         vm.pickFolder(presenter: root)
     }
 
-   
+    @ViewBuilder
+    private var randomControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Random loop").font(.title3).bold()
+                Spacer()
+                Toggle("", isOn: $vm.randomLoopEnabled)
+                    .labelsHidden()
+            }
+
+            Group {
+                HStack {
+                    Text("Min silence")
+                    Slider(value: $vm.minDelaySec, in: 1...600, step: 1)
+                    Text("\(Int(vm.minDelaySec))s").monospacedDigit()
+                }
+                HStack {
+                    Text("Max silence")
+                    Slider(value: $vm.maxDelaySec, in: 1...600, step: 1)
+                    Text("\(Int(vm.maxDelaySec))s").monospacedDigit()
+                }
+            }
+            .disabled(!vm.randomLoopEnabled)
+
+            // Keep min ≤ max automatically (gentle nudge)
+            .onChange(of: vm.minDelaySec) { newMin in
+                if newMin > vm.maxDelaySec { vm.maxDelaySec = newMin }
+            }
+            .onChange(of: vm.maxDelaySec) { newMax in
+                if newMax < vm.minDelaySec { vm.minDelaySec = newMax }
+            }
+
+            // Quick presets
+            HStack(spacing: 8) {
+                Group {
+                    Button("5–20s")  { vm.minDelaySec = 5;   vm.maxDelaySec = 20 }
+                    Button("30–90s") { vm.minDelaySec = 30;  vm.maxDelaySec = 90 }
+                    Button("2–5m")   { vm.minDelaySec = 120; vm.maxDelaySec = 300 }
+                }
+                .buttonStyle(.bordered)
+                .disabled(!vm.randomLoopEnabled)
+            }
+
+            // Tiny status line
+            Text(vm.randomLoopEnabled
+                 ? "Random gaps: \(formatRange(vm.minDelaySec, vm.maxDelaySec))"
+                 : "Sequential mode")
+            .font(.footnote)
+            .foregroundColor(.secondary)
+        }
+    }
 }
 
 private extension UIWindowScene {
