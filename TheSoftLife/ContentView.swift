@@ -235,3 +235,14 @@ private func vmQualityRank(_ q: AVSpeechSynthesisVoiceQuality) -> Int {
     default:        return 2
     }
 }
+
+
+enum AppAudioSettings {
+    private static let key = "backgroundsBehindFiles"
+
+    static var backgroundsBehindFiles: Bool {
+        get { UserDefaults.standard.bool(forKey: key) }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+}
+

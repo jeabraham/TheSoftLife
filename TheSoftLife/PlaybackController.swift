@@ -5,8 +5,6 @@ import CoreMedia
 
 import UserNotifications
 
-
-
 protocol PlaybackControllerDelegate: AnyObject {
     func playbackController(_ c: PlaybackController, didUpdateStatus text: String)
     func playbackController(_ c: PlaybackController, didUpdateProgress processed: Int, total: Int)
@@ -685,6 +683,7 @@ final class PlaybackController: NSObject {
         // If you insist on .m4a here, many files will be rejected as "Cannot Open".
         let outURL = cacheDir.appendingPathComponent("\(base)-\(uniq).caf") // <- safer than .m4a
 
+        
         TTSSynthesizer.shared.synthesizeToFile(
             text: text,
             languageCode: settings?.languageCode ?? "en-US",
@@ -694,8 +693,61 @@ final class PlaybackController: NSObject {
             outputURL: outURL
         ) { success in
             guard success else { completion(nil); return }
+
             self.validatePlayableAsset(url: outURL, retries: 6, delay: 0.08) { ok in
-                completion(ok ? outURL : nil)
+                guard ok else { completion(nil); return }
+
+                // If we’re not layering, just return the foreground as-is.
+                guard AppAudioSettings.backgroundsBehindFiles == true else {
+                    print("[ExplicitOverBed] backgroundsBehindFiles=OFF → returning TTS only")
+                    completion(outURL)
+                    return
+                }
+
+                // backgroundsBehindFiles = true → render bed, duck it, and mix overtop
+                let outDirectory = outURL.deletingLastPathComponent()
+                let fgAsset = AVURLAsset(url: outURL)
+                let fgDur = max(0.25, CMTimeGetSeconds(fgAsset.duration))
+                let bedDur = fgDur + 0.15  // small tail padding
+                print("[ExplicitOverBed] ON. fgDur=\(String(format: "%.2f", fgDur))s, bedDur=\(String(format: "%.2f", bedDur))s")
+
+                // Ask your BackgroundSubliminalFactory for the bed at this duration
+                guard let bedURL = BackgroundSubliminalFactory.url(for: bedDur, in: outDirectory) else {
+                    print("[ExplicitOverBed] Failed to generate bed; returning TTS only")
+                    completion(outURL)
+                    return
+                }
+
+                // Mix into a temporary file, then replace outURL
+                let tmpURL = outDirectory.appendingPathComponent("mix-\(UUID().uuidString.prefix(8)).m4a")
+
+                ExplicitOverBedRenderer.offlineMixPublic(
+                    fgURL: outURL,
+                    bedURL: bedURL,
+                    outURL: tmpURL,
+                    options: .init(
+                        fgGain: 1.0,
+                        bedBaseGain: 1.0,
+                        bedDuckWhileSpeech: 0.35,   // try 0.25–0.45
+                        speechDetectAbsThreshold: 0.0015,
+                        fadeSeconds: 0.008
+                    )
+                ) { ok in
+                    guard ok else { completion(nil); return }
+
+                    // Replace the original with the mixed file
+                    try? FileManager.default.removeItem(at: outURL)
+                    do {
+                        try FileManager.default.moveItem(at: tmpURL, to: outURL)
+                        self.validatePlayableAsset(url: outURL, retries: 6, delay: 0.08) { ok2 in
+                            print("[ExplicitOverBed] Mixed and replaced → \(ok2 ? "OK" : "Not playable")")
+                            completion(ok2 ? outURL : nil)
+                        }
+                    } catch {
+                        print("[ExplicitOverBed] Move failed:", error.localizedDescription)
+                        completion(nil)
+                    }
+                }
             }
         }
     }

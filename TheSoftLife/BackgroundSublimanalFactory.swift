@@ -10,7 +10,7 @@ enum BackgroundSubliminalFactory {
     static var noiseKind: NoiseKind = .pink
     
     /// Overall noise loudness (linear 0.0 ... 1.0); ~0.15–0.25 is comfy
-    static var noiseGain: Float = 0.15
+    static var noiseGain: Float = 0.10
     
     /// Insert subliminals? If false, you just get noise.
     static var enableSubliminals = true
@@ -19,10 +19,10 @@ enum BackgroundSubliminalFactory {
     static var subliminalGain: Float = 0.08
     
     /// Interval between subliminals (seconds, inclusive range)
-    static var subliminalIntervalRange: ClosedRange<Double> = 1.0...10.0
+    static var subliminalIntervalRange: ClosedRange<Double> = 1.0...5.0
     
     // At the top of your BackgroundSubliminalFactory:
-    static var enableLogging = true
+    static var enableLogging = false
     private static func log(_ items: Any...) {
         guard enableLogging else { return }
         print("[BackgroundSubliminalFactory]", items.map { "\($0)" }.joined(separator: " "))

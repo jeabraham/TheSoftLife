@@ -8,6 +8,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         SubliminalFolderBuilder.buildFromBundleFolder("subliminal_phrases") { result in
             print("Build finished:", result)
         }
+
+        if UserDefaults.standard.object(forKey: "backgroundsBehindFiles") == nil {
+            AppAudioSettings.backgroundsBehindFiles = false
+        }
+
+        // For testing
+        AppAudioSettings.backgroundsBehindFiles = true
         return true
         
         // Called when user taps a notification or action
