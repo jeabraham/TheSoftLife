@@ -14,6 +14,13 @@ import AVFoundation
 /// Heavy work runs off the main queue. Completion is called on the main queue.
 final class SubliminalFolderBuilder {
 
+    /// Turn console logging on/off globally for this builder.
+    static var enableLogging = true
+    private static func log(_ items: Any...) {
+        guard enableLogging else { return }
+        print("[SubliminalFolderBuilder]", items.map { "\($0)" }.joined(separator: " "))
+    }
+
     struct VoiceOptions {
         var languageCode: String = "en-US"
         var voiceIdentifier: String? = nil
@@ -44,32 +51,58 @@ final class SubliminalFolderBuilder {
     {
         // Jump off the main queue immediately
         DispatchQueue.global(qos: backgroundQoS).async {
+            let t0 = CFAbsoluteTimeGetCurrent()
+            log("BEGIN buildFromBundleFolder:",
+                "folder=\(bundleFolderName)",
+                "overwrite=\(overwrite)",
+                "includeExisting=\(includeExisting)",
+                "qos=\(backgroundQoS)")
+
             do {
                 // Locate the folder in the bundle
                 guard let folderURL = Bundle.main.url(forResource: bundleFolderName, withExtension: nil) else {
+                    log("ERROR: bundle subfolder not found:", bundleFolderName)
                     throw BuilderError.bundleFolderMissing(bundleFolderName)
                 }
+                log("Bundle:", Bundle.main.bundlePath)
+                log("Found bundle folder:", folderURL.path)
 
                 // Find all .txt files
                 let contents = try FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: nil)
-                let txtFiles = contents.filter { $0.pathExtension.lowercased() == "txt" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-                guard !txtFiles.isEmpty else { throw BuilderError.noTextFilesFound }
+                let txtFiles = contents
+                    .filter { $0.pathExtension.lowercased() == "txt" }
+                    .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+                guard !txtFiles.isEmpty else {
+                    log("ERROR: no .txt files found in", folderURL.path)
+                    throw BuilderError.noTextFilesFound
+                }
+                log("Text files (\(txtFiles.count)):")
+                for u in txtFiles { log(" •", u.lastPathComponent) }
 
                 // Ensure Application Support / subliminals exists
-                let appSup = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                let appSup = try FileManager.default.url(for: .applicationSupportDirectory,
+                                                         in: .userDomainMask,
+                                                         appropriateFor: nil,
+                                                         create: true)
                 let rootOut = appSup.appendingPathComponent("subliminals", isDirectory: true)
                 try FileManager.default.createDirectory(at: rootOut, withIntermediateDirectories: true)
+                log("Output root:", rootOut.path)
 
                 let group = DispatchGroup()
                 let lock = NSLock()
                 var outputURLs: [URL] = []
                 var firstError: Error?
+                var generatedCount = 0
+                var skippedCount = 0
+                var queuedCount = 0
 
                 // Process each category file
                 for txt in txtFiles {
                     let category = txt.deletingPathExtension().lastPathComponent
                     let categoryOut = rootOut.appendingPathComponent(category, isDirectory: true)
                     try FileManager.default.createDirectory(at: categoryOut, withIntermediateDirectories: true)
+                    log("Category:", category, "→", categoryOut.lastPathComponent)
 
                     // Read lines
                     let raw = try String(contentsOf: txt, encoding: .utf8)
@@ -77,6 +110,8 @@ final class SubliminalFolderBuilder {
                         .components(separatedBy: .newlines)
                         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                         .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+
+                    log("  Lines to synthesize:", lines.count)
 
                     for (idx, phrase) in lines.enumerated() {
                         let fname = String(format: "%03d_%@", idx + 1, slug(phrase))
@@ -86,7 +121,15 @@ final class SubliminalFolderBuilder {
                             if includeExisting {
                                 lock.lock(); outputURLs.append(outURL); lock.unlock()
                             }
+                            skippedCount += 1
+                            if (idx % 25) == 0 { log("  Skipping existing (sample):", outURL.lastPathComponent) }
                             continue
+                        }
+
+                        queuedCount += 1
+                        if (idx % 25) == 0 {
+                            log("  Queue synth:", "\"\(phrase)\"",
+                                "→", outURL.lastPathComponent)
                         }
 
                         group.enter()
@@ -103,11 +146,19 @@ final class SubliminalFolderBuilder {
                             // We’re now on MAIN because TTSSynthesizer calls completion on main. Hop back to bg queue:
                             DispatchQueue.global(qos: backgroundQoS).async {
                                 if ok {
-                                    lock.lock(); outputURLs.append(outURL); lock.unlock()
+                                    lock.lock()
+                                    outputURLs.append(outURL)
+                                    generatedCount += 1
+                                    lock.unlock()
+                                    if (generatedCount % 20) == 0 {
+                                        log("  Synth complete (\(generatedCount)):", outURL.lastPathComponent)
+                                    }
                                 } else if firstError == nil {
-                                    firstError = NSError(domain: "SubliminalFolderBuilder",
-                                                         code: -1,
-                                                         userInfo: [NSLocalizedDescriptionKey: "TTS write failed: \(outURL.lastPathComponent)"])
+                                    let err = NSError(domain: "SubliminalFolderBuilder",
+                                                      code: -1,
+                                                      userInfo: [NSLocalizedDescriptionKey: "TTS write failed: \(outURL.lastPathComponent)"])
+                                    firstError = err
+                                    log("ERROR:", err.localizedDescription)
                                 }
                                 group.leave()
                             }
@@ -116,6 +167,12 @@ final class SubliminalFolderBuilder {
                 }
 
                 group.notify(queue: .global(qos: backgroundQoS)) {
+                    let elapsed = CFAbsoluteTimeGetCurrent() - t0
+                    log("DONE buildFromBundleFolder.",
+                        "generated=\(generatedCount)",
+                        "skipped=\(skippedCount)",
+                        "queued=\(queuedCount)",
+                        String(format: "elapsed=%.2fs", elapsed))
                     // Return results on MAIN for UI safety
                     DispatchQueue.main.async {
                         if let e = firstError { completion(.failure(e)) }
@@ -123,6 +180,7 @@ final class SubliminalFolderBuilder {
                     }
                 }
             } catch {
+                log("FATAL:", error.localizedDescription)
                 DispatchQueue.main.async { completion(.failure(error)) }
             }
         }

@@ -11,6 +11,18 @@
 		EB08BC202E68E55000BA3E37 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = EB08BC142E68E55000BA3E37 /* LICENSE */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		EBDE0C0B2E6B68BE00FBE2F4 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = subliminal_phrases;
+			dstSubfolderSpec = 7;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		EB08BC052E68E51200BA3E37 /* TheSoftLife.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TheSoftLife.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EB08BC132E68E54200BA3E37 /* TheSoftLife.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TheSoftLife.entitlements; sourceTree = "<group>"; };
@@ -26,7 +38,34 @@
 			);
 			target = EB08BC042E68E51200BA3E37 /* TheSoftLife */;
 		};
+		EBDE0C192E6B690800FBE2F4 /* Exceptions for "subliminal_phrases" folder in "TheSoftLife" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				body_focused.txt,
+				dumbing_down.txt,
+				her_focused.txt,
+				mind_focused.txt,
+				pride_humiliation.txt,
+				risk_excited.txt,
+			);
+			target = EB08BC042E68E51200BA3E37 /* TheSoftLife */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		EBDE0C202E6B691000FBE2F4 /* Exceptions for "subliminal_phrases" folder in "Copy Files" phase from "TheSoftLife" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = EBDE0C0B2E6B68BE00FBE2F4 /* CopyFiles */;
+			membershipExceptions = (
+				body_focused.txt,
+				dumbing_down.txt,
+				her_focused.txt,
+				mind_focused.txt,
+				pride_humiliation.txt,
+				risk_excited.txt,
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		EB08BC072E68E51200BA3E37 /* TheSoftLife */ = {
@@ -37,8 +76,12 @@
 			path = TheSoftLife;
 			sourceTree = "<group>";
 		};
-		EBDE0BDD2E6B66FF00FBE2F4 /* subliminal_phrases */ = {
+		EBDE0C122E6B690100FBE2F4 /* subliminal_phrases */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				EBDE0C192E6B690800FBE2F4 /* Exceptions for "subliminal_phrases" folder in "TheSoftLife" target */,
+				EBDE0C202E6B691000FBE2F4 /* Exceptions for "subliminal_phrases" folder in "Copy Files" phase from "TheSoftLife" target */,
+			);
 			path = subliminal_phrases;
 			sourceTree = "<group>";
 		};
@@ -63,7 +106,7 @@
 				EB08BC132E68E54200BA3E37 /* TheSoftLife.entitlements */,
 				EB08BC142E68E55000BA3E37 /* LICENSE */,
 				EB08BC152E68E55000BA3E37 /* README.md */,
-				EBDE0BDD2E6B66FF00FBE2F4 /* subliminal_phrases */,
+				EBDE0C122E6B690100FBE2F4 /* subliminal_phrases */,
 			);
 			sourceTree = "<group>";
 		};
@@ -85,6 +128,7 @@
 				EB08BC012E68E51200BA3E37 /* Sources */,
 				EB08BC022E68E51200BA3E37 /* Frameworks */,
 				EB08BC032E68E51200BA3E37 /* Resources */,
+				EBDE0C0B2E6B68BE00FBE2F4 /* CopyFiles */,
 			);
 			buildRules = (
 			);
@@ -92,7 +136,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				EB08BC072E68E51200BA3E37 /* TheSoftLife */,
-				EBDE0BDD2E6B66FF00FBE2F4 /* subliminal_phrases */,
+				EBDE0C122E6B690100FBE2F4 /* subliminal_phrases */,
 			);
 			name = TheSoftLife;
 			packageProductDependencies = (
