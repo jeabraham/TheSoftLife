@@ -26,7 +26,12 @@ struct ContentView: View {
                         .disabled(!vm.canControlPlayback)
                     
                 }
-                
+                Button("Start Random (5–20s)") {
+                    vm.randomLoopEnabled = true
+                    vm.minDelaySec = 5
+                    vm.maxDelaySec = 20
+                    vm.startSession()
+                }
                 Divider()
                 settings
                 Spacer()

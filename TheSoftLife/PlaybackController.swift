@@ -39,6 +39,17 @@ final class PlaybackController: NSObject {
     private var timeObs: NSKeyValueObservation?
     private var itemStatusObs: NSKeyValueObservation?
     private var itemFailObserver: Any?
+    
+    // MARK: - Random mode state / config
+    private var randomActive = false
+    private var randomMinSilence: TimeInterval = 5
+    private var randomMaxSilence: TimeInterval = 30
+    private let lookaheadPairs = 2             // keep N [speech+silence] pairs queued
+
+    // Hybrid (optional): thresholds + pending-resume state for notification path
+    private var shortGapThreshold: TimeInterval = 1_000_000 // always silence for now, test notification-based system later
+    private var pendingNextFileURL: URL?
+    private var pendingResumeDeadline: Date?
 
 
     // Random loop
@@ -75,6 +86,123 @@ final class PlaybackController: NSObject {
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         observePlaybackEnd()
         configureAudioSession()
+    }
+    
+    private func isSilenceURL(_ url: URL) -> Bool { url.lastPathComponent.hasPrefix("silence-") }
+    private func isSilenceItem(_ item: AVPlayerItem) -> Bool {
+        guard let u = (item.asset as? AVURLAsset)?.url else { return false }
+        return isSilenceURL(u)
+    }
+
+    @discardableResult
+    private func enqueueReturningItem(_ url: URL) -> AVPlayerItem {
+        let item = AVPlayerItem(url: url)
+        let after = lastEnqueuedItem ?? player.items().last
+        if player.canInsert(item, after: after) { player.insert(item, after: after) }
+        else { player.insert(item, after: nil) }
+        lastEnqueuedItem = item
+
+        if player.timeControlStatus != .playing {
+            ensureActiveAudioSession()
+            player.playImmediately(atRate: 1.0)
+        }
+        return item
+    }
+
+    private func enqueueAfter(item: AVPlayerItem, url: URL) {
+        let next = AVPlayerItem(url: url)
+        if player.canInsert(next, after: item) { player.insert(next, after: item) }
+        else { player.insert(next, after: nil) }
+        lastEnqueuedItem = next
+    }
+    
+    private func fillRandomBufferIfNeeded() {
+        guard randomActive else { return }
+        // Count *speech* items only (ignore silence) to size buffer
+        let speechCount = player.items().filter { !isSilenceItem($0) }.count
+        let needed = max(0, lookaheadPairs - speechCount)
+        guard needed > 0 else { return }
+        for _ in 0..<needed { produceAndEnqueueRandomPair() }
+    }
+    
+    // MARK: Random pair producer (speech + silence directly after)
+    private func produceAndEnqueueRandomPair() {
+        // 0) Bail if random mode is not active
+        guard randomActive else { return }
+
+        // 1) Pick a file, avoid immediate repetition if possible
+        //    (peek at the last *speech* item’s filename, if any)
+        let lastSpeechName: String? = {
+            for it in player.items().reversed() {
+                if !isSilenceItem(it),
+                   let name = (it.asset as? AVURLAsset)?.url.deletingPathExtension().lastPathComponent {
+                    return name
+                }
+            }
+            return nil
+        }()
+
+        var candidate = files.randomElement()
+        if let lastName = lastSpeechName {
+            // Try a few times to avoid choosing the same file again
+            var attempts = 0
+            while let c = candidate,
+                  c.deletingPathExtension().lastPathComponent == lastName,
+                  attempts < 4 {
+                candidate = files.randomElement()
+                attempts += 1
+            }
+        }
+
+        guard let file = candidate else { return }
+
+        // 2) Synthesize — synthOne already returns URL? and runs completion on main
+        synthOne(fileURL: file) { [weak self] maybeURL in
+            guard let self = self else { return }
+            guard self.randomActive else { return } // state may have changed while synthesizing
+
+            // 3) Ensure we actually have a playable file URL
+            guard let speechURL = maybeURL else {
+                // If synth failed/empty, try again soon with a different random pick
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                    self?.produceAndEnqueueRandomPair()
+                }
+                return
+            }
+
+            // (Optional visibility)
+            do {
+                let attrs = try FileManager.default.attributesOfItem(atPath: speechURL.path)
+                if let size = attrs[.size] as? NSNumber {
+                    print("🎙️ Speech ready:", speechURL.lastPathComponent, "size=\(size)")
+                }
+            } catch { /* ignore */ }
+
+            // 4) Enqueue speech now…
+            let displayName = file.deletingPathExtension().lastPathComponent
+            let speechItem = self.enqueueReturningItem(speechURL)
+            self.delegate?.playbackController(self, didStartPlaying: displayName)
+            self.delegate?.playbackControllerDidPlay(self)
+
+            // 5) Decide the inter-item gap and enqueue silence immediately after this speech
+            let gap = Double.random(in: self.randomMinSilence...self.randomMaxSilence)
+
+            // If you later add the hybrid path (notification for long gaps),
+            // branch here on `gap` vs `shortGapThreshold`. For now we always enqueue silence.
+            if gap <= shortGapThreshold {
+                if let sURL = SilenceFactory.url(for: gap, in: self.cacheDir) {
+                    self.enqueueAfter(item: speechItem, url: sURL)
+                }   else {
+                    // If silence creation failed, at least keep the buffer growing by scheduling the next pair.
+                    print("⚠️ Failed to create silence; continuing without a gap after \(displayName)")
+                }
+            } else {
+                self.planGapAndNextFile() // the helper we outlined earlier
+            }
+
+            // 6) (Optional) Top up buffer proactively if you want faster fill:
+            // self.fillRandomBufferIfNeeded()
+        }
     }
     
     private func itemName(_ item: AVPlayerItem?) -> String {
@@ -226,6 +354,7 @@ final class PlaybackController: NSObject {
     func stop() {
         randomTimer?.invalidate()
         randomTimer = nil
+        randomActive = false   // <- add this
 
         player.pause()
         player.removeAllItems()
@@ -317,15 +446,32 @@ final class PlaybackController: NSObject {
 
     // MARK: - Random Loop (infinite)
 
+    // PlaybackController.swift
+    // PlaybackController.swift
     private func startRandomLoop(minDelay: TimeInterval, maxDelay: TimeInterval) {
         guard !files.isEmpty else {
             delegate?.playbackController(self, didUpdateStatus: "No .txt or .rtf files")
             return
         }
+
+        // Turn on random mode and set the silence window
+        randomActive = true
+        randomMinSilence = min(minDelay, maxDelay)
+        randomMaxSilence = max(minDelay, maxDelay)
+
         delegate?.playbackController(self, didUpdateStatus: "Random loop…")
-        // Kick off the first item immediately
-        scheduleNextRandom(after: 0)
+
+        // Seed the queue with a few [speech + silence] pairs
+        fillRandomBufferIfNeeded()
+
+        // Make sure playback starts if we already have items
+        ensureActiveAudioSession()
+        if player.timeControlStatus != .playing, !player.items().isEmpty {
+            player.playImmediately(atRate: 1.0)
+        }
     }
+
+
 
     private func scheduleNextRandom(after delay: TimeInterval) {
         randomTimer?.invalidate()
@@ -408,7 +554,33 @@ final class PlaybackController: NSObject {
         return item
     }
 
+    private func planGapAndNextFile() {
+        let gap = Double.random(in: randomMinSilence...randomMaxSilence)
+        if gap <= shortGapThreshold {
+            // already handled by our pair logic (speech + silence) — nothing to do
+            return
+        }
 
+        // Long gap → stop audio, schedule notif, and remember the next file
+        stopAudioSessionAndClearQueue()   // implement to pause, removeAllItems, setActive(false)
+        if let next = files.randomElement() {
+            pendingNextFileURL = next
+            pendingResumeDeadline = Date().addingTimeInterval(gap)
+            scheduleNextNotification(after: gap,
+                                     fileName: next.deletingPathExtension().lastPathComponent)
+            delegate?.playbackController(self,
+                didUpdateStatus: "Paused until next cue (~\(Int(gap/60)) min)")
+        }
+    }
+
+    private func stopAudioSessionAndClearQueue() {
+        player.pause()
+        player.removeAllItems()
+        do { try AVAudioSession.sharedInstance().setActive(false) } catch {
+            print("AVAudioSession deactivate error:", error)
+        }
+    }
+    
     private func observePlaybackEnd() {
         itemEndObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -445,10 +617,9 @@ final class PlaybackController: NSObject {
             // 4) Mode-specific follow-up
             switch self.currentMode {
             case .randomLoop:
-                // Keep the random look-ahead buffer topped up
+                // keep the buffer filled
                 self.fillRandomBufferIfNeeded()
 
-                // If there are still items (speech or silence), keep playback alive
                 if !self.player.items().isEmpty {
                     self.ensureActiveAudioSession()
                     if self.player.timeControlStatus != .playing {
@@ -457,7 +628,6 @@ final class PlaybackController: NSObject {
                     }
                     self.dumpQueue("after nudge (random)")
                 } else {
-                    // Nothing left — report paused so UI can reflect the idle state
                     self.delegate?.playbackControllerDidPause(self)
                 }
 
