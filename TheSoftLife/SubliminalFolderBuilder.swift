@@ -1,131 +1,136 @@
 import Foundation
 import AVFoundation
 
-/// Reads bundled phrase lists and renders one m4a file per line using TTSSynthesizer.
-/// Output layout:
-///   Application Support / subliminals / <category> / <index>_<slug>.m4a
+/// Builds subliminal clips from every .txt in a bundle subfolder (e.g. "subliminal_phrases").
+/// Each file is treated as a category. One line = one spoken .m4a clip.
 ///
-/// Categories expected in the app bundle (plain UTF-8, one phrase per line):
-///   her_focused.txt
-///   body_focused.txt
-///   mind_focused.txt
-///   pride_humiliation.txt
-///   risk_excited.txt
-///   dumbing_down.txt
+/// Bundle structure (example):
+///   Resources/subliminal_phrases/her_focused.txt
+///   Resources/subliminal_phrases/mind_focused.txt
 ///
-/// Notes:
-/// - Blank lines and lines starting with '#' are ignored.
-/// - Voice defaults are whispery/slow; override via parameters as needed.
-/// - Safe to call repeatedly; it will skip files that already exist unless `overwrite = true`.
-final class SubliminalClipBuilder {
+/// Output structure:
+///   Application Support / subliminals / <category> / 001_<slug>.m4a
+///
+/// Heavy work runs off the main queue. Completion is called on the main queue.
+final class SubliminalFolderBuilder {
 
     struct VoiceOptions {
         var languageCode: String = "en-US"
-        /// Pass a system voice identifier if you want a specific voice; nil uses language default.
         var voiceIdentifier: String? = nil
-        /// iOS TTS "rate" ~ 0.40–0.52 is natural; go slower for subliminals.
-        var rate: Float = 0.40
-        /// Slightly lower pitch keeps it soft/subdued.
-        var pitch: Float = 0.85
+        var rate: Float = 0.40     // slower is nicer for subliminal
+        var pitch: Float = 0.85    // slightly lower/softer
     }
 
     enum BuilderError: Error {
-        case bundleFileMissing(String)
-        case appSupportUnavailable
+        case bundleFolderMissing(String)
+        case couldNotAccessAppSupport
+        case noTextFilesFound
     }
 
-    /// Build ALL categories found in the bundle into Application Support/subliminals.
-    /// Returns URLs of generated clips (including ones that already existed if `includeExisting` is true).
-    static func buildAllFromBundle(overwrite: Bool = false,
-                                   includeExisting: Bool = true,
-                                   voice: VoiceOptions = VoiceOptions(),
-                                   completion: @escaping (Result<[URL], Error>) -> Void)
+    /// Build all clips from every .txt in `bundleFolderName` inside the main bundle.
+    /// - Parameters:
+    ///   - bundleFolderName: e.g. "subliminal_phrases"
+    ///   - overwrite: if true, regenerates files; if false, skips existing
+    ///   - includeExisting: if true, existing files are included in the returned list
+    ///   - backgroundQoS: background queue QoS
+    ///   - voice: TTS voice settings
+    ///   - completion: called on main queue with all generated (and optionally existing) URLs
+    static func buildFromBundleFolder(_ bundleFolderName: String = "subliminal_phrases",
+                                      overwrite: Bool = false,
+                                      includeExisting: Bool = true,
+                                      backgroundQoS: DispatchQoS.QoSClass = .utility,
+                                      voice: VoiceOptions = VoiceOptions(),
+                                      completion: @escaping (Result<[URL], Error>) -> Void)
     {
-        do {
-            let appSup = try FileManager.default.url(for: .applicationSupportDirectory,
-                                                     in: .userDomainMask,
-                                                     appropriateFor: nil,
-                                                     create: true)
-            let rootOut = appSup.appendingPathComponent("subliminals", isDirectory: true)
-            try FileManager.default.createDirectory(at: rootOut, withIntermediateDirectories: true)
-
-            let categories = [
-                "her_focused",
-                "body_focused",
-                "mind_focused",
-                "pride_humiliation",
-                "risk_excited",
-                "dumbing_down"
-            ]
-
-            var allURLs: [URL] = []
-            let group = DispatchGroup()
-
-            // Serial gate to append safely
-            let lock = NSLock()
-            var firstError: Error?
-
-            for cat in categories {
-                guard let txtURL = Bundle.main.url(forResource: cat, withExtension: "txt") else {
-                    // If a file is missing, we fail the whole run so the caller knows.
-                    firstError = BuilderError.bundleFileMissing("\(cat).txt")
-                    break
+        // Jump off the main queue immediately
+        DispatchQueue.global(qos: backgroundQoS).async {
+            do {
+                // Locate the folder in the bundle
+                guard let folderURL = Bundle.main.url(forResource: bundleFolderName, withExtension: nil) else {
+                    throw BuilderError.bundleFolderMissing(bundleFolderName)
                 }
-                let catOut = rootOut.appendingPathComponent(cat, isDirectory: true)
-                try FileManager.default.createDirectory(at: catOut, withIntermediateDirectories: true)
 
-                // Load, split, sanitize
-                let raw = try String(contentsOf: txtURL, encoding: .utf8)
-                let lines = raw
-                    .components(separatedBy: .newlines)
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+                // Find all .txt files
+                let contents = try FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: nil)
+                let txtFiles = contents.filter { $0.pathExtension.lowercased() == "txt" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+                guard !txtFiles.isEmpty else { throw BuilderError.noTextFilesFound }
 
-                for (idx, line) in lines.enumerated() {
-                    let fname = String(format: "%03d_%@", idx + 1, slug(line))
-                    let outURL = catOut.appendingPathComponent(fname).appendingPathExtension("m4a")
+                // Ensure Application Support / subliminals exists
+                let appSup = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                let rootOut = appSup.appendingPathComponent("subliminals", isDirectory: true)
+                try FileManager.default.createDirectory(at: rootOut, withIntermediateDirectories: true)
 
-                    if FileManager.default.fileExists(atPath: outURL.path), !overwrite {
-                        if includeExisting {
-                            lock.lock(); allURLs.append(outURL); lock.unlock()
+                let group = DispatchGroup()
+                let lock = NSLock()
+                var outputURLs: [URL] = []
+                var firstError: Error?
+
+                // Process each category file
+                for txt in txtFiles {
+                    let category = txt.deletingPathExtension().lastPathComponent
+                    let categoryOut = rootOut.appendingPathComponent(category, isDirectory: true)
+                    try FileManager.default.createDirectory(at: categoryOut, withIntermediateDirectories: true)
+
+                    // Read lines
+                    let raw = try String(contentsOf: txt, encoding: .utf8)
+                    let lines = raw
+                        .components(separatedBy: .newlines)
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+
+                    for (idx, phrase) in lines.enumerated() {
+                        let fname = String(format: "%03d_%@", idx + 1, slug(phrase))
+                        let outURL = categoryOut.appendingPathComponent(fname).appendingPathExtension("m4a")
+
+                        if FileManager.default.fileExists(atPath: outURL.path), !overwrite {
+                            if includeExisting {
+                                lock.lock(); outputURLs.append(outURL); lock.unlock()
+                            }
+                            continue
                         }
-                        continue
-                    }
 
-                    group.enter()
-                    TTSSynthesizer.shared.synthesizeToFile(
-                        text: line,
-                        languageCode: voice.languageCode,
-                        voiceIdentifier: voice.voiceIdentifier,
-                        rate: voice.rate,
-                        pitch: voice.pitch,
-                        outputURL: outURL
-                    ) { ok in
-                        if ok {
-                            lock.lock(); allURLs.append(outURL); lock.unlock()
-                        } else if firstError == nil {
-                            firstError = NSError(domain: "SubliminalClipBuilder",
-                                                 code: -1,
-                                                 userInfo: [NSLocalizedDescriptionKey: "TTS write failed for \(outURL.lastPathComponent)"])
+                        group.enter()
+
+                        // Your TTSSynthesizer completion fires on MAIN—bridge it safely.
+                        TTSSynthesizer.shared.synthesizeToFile(
+                            text: phrase,
+                            languageCode: voice.languageCode,
+                            voiceIdentifier: voice.voiceIdentifier,
+                            rate: voice.rate,
+                            pitch: voice.pitch,
+                            outputURL: outURL
+                        ) { ok in
+                            // We’re now on MAIN because TTSSynthesizer calls completion on main. Hop back to bg queue:
+                            DispatchQueue.global(qos: backgroundQoS).async {
+                                if ok {
+                                    lock.lock(); outputURLs.append(outURL); lock.unlock()
+                                } else if firstError == nil {
+                                    firstError = NSError(domain: "SubliminalFolderBuilder",
+                                                         code: -1,
+                                                         userInfo: [NSLocalizedDescriptionKey: "TTS write failed: \(outURL.lastPathComponent)"])
+                                }
+                                group.leave()
+                            }
                         }
-                        group.leave()
                     }
                 }
-            }
 
-            // Finish callback
-            group.notify(queue: .main) {
-                if let e = firstError { completion(.failure(e)) }
-                else { completion(.success(allURLs.sorted { $0.path < $1.path })) }
+                group.notify(queue: .global(qos: backgroundQoS)) {
+                    // Return results on MAIN for UI safety
+                    DispatchQueue.main.async {
+                        if let e = firstError { completion(.failure(e)) }
+                        else { completion(.success(outputURLs.sorted { $0.path < $1.path })) }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
             }
-        } catch {
-            completion(.failure(error))
         }
     }
 
     // MARK: - Helpers
 
-    /// Lowercase, ASCII-only file slugs; keep short for path friendliness.
+    /// Simple file-name slugger: lowercase, ascii, short, safe
     private static func slug(_ s: String) -> String {
         let lowered = s.lowercased()
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))

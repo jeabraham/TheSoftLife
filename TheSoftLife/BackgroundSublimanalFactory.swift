@@ -1,4 +1,5 @@
 import AVFoundation
+import Accelerate
 
 /// Generates background noise with optional subliminal phrase overlays,
 /// cached by (duration + directory) just like SilenceFactory.

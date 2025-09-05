@@ -37,6 +37,11 @@
 			path = TheSoftLife;
 			sourceTree = "<group>";
 		};
+		EBDE0BDD2E6B66FF00FBE2F4 /* subliminal_phrases */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = subliminal_phrases;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +63,7 @@
 				EB08BC132E68E54200BA3E37 /* TheSoftLife.entitlements */,
 				EB08BC142E68E55000BA3E37 /* LICENSE */,
 				EB08BC152E68E55000BA3E37 /* README.md */,
+				EBDE0BDD2E6B66FF00FBE2F4 /* subliminal_phrases */,
 			);
 			sourceTree = "<group>";
 		};
@@ -86,6 +92,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				EB08BC072E68E51200BA3E37 /* TheSoftLife */,
+				EBDE0BDD2E6B66FF00FBE2F4 /* subliminal_phrases */,
 			);
 			name = TheSoftLife;
 			packageProductDependencies = (

@@ -5,16 +5,20 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        SubliminalFolderBuilder.buildFromBundleFolder("subliminal_phrases") { result in
+            print("Build finished:", result)
+        }
         return true
-    }
-
-    // Called when user taps a notification or action
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                didReceive response: UNNotificationResponse,
-                                withCompletionHandler completionHandler: @escaping () -> Void) {
-        print("User tapped notification:", response.actionIdentifier)
-        // TODO: resume playback etc.
-        completionHandler()
+        
+        // Called when user taps a notification or action
+        func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                    didReceive response: UNNotificationResponse,
+                                    withCompletionHandler completionHandler: @escaping () -> Void) {
+            print("User tapped notification:", response.actionIdentifier)
+            // TODO: resume playback etc.
+            completionHandler()
+        }
+        
     }
 }
 
