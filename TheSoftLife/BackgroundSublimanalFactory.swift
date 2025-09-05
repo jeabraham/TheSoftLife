@@ -16,13 +16,13 @@ enum BackgroundSubliminalFactory {
     static var enableSubliminals = true
     
     /// Subliminal level relative to full scale (linear). -24 dB ≈ 0.063
-    static var subliminalGain: Float = 0.06
+    static var subliminalGain: Float = 0.05
     
     /// Interval between subliminals (seconds, inclusive range)
-    static var subliminalIntervalRange: ClosedRange<Double> = 1.0...5.0
+    static var subliminalIntervalRange: ClosedRange<Double> = 2.0...7.0
     
     // At the top of your BackgroundSubliminalFactory:
-    static var enableLogging = false
+    static var enableLogging = true
     private static func log(_ items: Any...) {
         guard enableLogging else { return }
         print("[BackgroundSubliminalFactory]", items.map { "\($0)" }.joined(separator: " "))
@@ -137,8 +137,11 @@ enum BackgroundSubliminalFactory {
                 
                 // 2b) Check if a NEW insert begins inside this buffer (only if none is active)
                 if enableSubliminals, activePhrase == nil, !phrases.isEmpty,
-                   nextInsertFrame >= frameStart && nextInsertFrame < frameEnd
+                    nextInsertFrame < frameEnd
                 {
+                    if nextInsertFrame < frameStart {
+                        nextInsertFrame = frameStart
+                    }
                     let phrase = phrases.randomElement()!
                     let startOffset = nextInsertFrame - frameStart
                     let phraseFrames = phrase.samples.count
