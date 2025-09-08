@@ -61,6 +61,8 @@
 				dumbing_down.txt,
 				her_focused.txt,
 				mind_focused.txt,
+				other_women.txt,
+				others_see.txt,
 				pride_humiliation.txt,
 				risk_excited.txt,
 			);

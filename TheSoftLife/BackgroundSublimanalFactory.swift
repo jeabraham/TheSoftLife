@@ -137,7 +137,7 @@ enum BackgroundSubliminalFactory {
                 
                 // 2b) Check if a NEW insert begins inside this buffer (only if none is active)
                 if enableSubliminals, activePhrase == nil, !phrases.isEmpty,
-                    nextInsertFrame < frameEnd
+                   nextInsertFrame < frameEnd
                 {
                     if nextInsertFrame < frameStart {
                         nextInsertFrame = frameStart
@@ -297,7 +297,8 @@ enum BackgroundSubliminalFactory {
         var failCount = 0
         for (i, u) in urls.enumerated() {
             if let p = decodeMono(url: u, targetSR: sr) {
-                phrases.append(p)
+                let q = subliminalAudioFilter(p: p)
+                phrases.append(q)
                 if i < 5 { log("Decoded OK:", u.lastPathComponent, "(\(p.samples.count) samples)") }
             } else {
                 failCount += 1
@@ -411,5 +412,109 @@ enum BackgroundSubliminalFactory {
             dst[dstIdx] = max(-1.0, min(1.0, mixed))
         }
         return count
+    }
+    
+        
+    // MARK: - Biquad + helpers
+    private struct Biquad {
+        var b0, b1, b2, a1, a2: Float
+        var z1: Float = 0, z2: Float = 0
+        
+        mutating func process(_ x: Float) -> Float {
+            let y = b0*x + z1
+            z1 = b1*x - a1*y + z2
+            z2 = b2*x - a2*y
+            return y
+        }
+    }
+    
+    private static func biquadHighPass(sr: Double, fc: Double, q: Double = 0.707) -> Biquad {
+        let w0 = 2.0 * .pi * fc / sr
+        let alpha = sin(w0)/(2.0*q)
+        let cosw = cos(w0)
+        let b0 =  (1 + cosw)/2
+        let b1 = -(1 + cosw)
+        let b2 =  (1 + cosw)/2
+        let a0 =   1 + alpha
+        let a1 =  -2*cosw
+        let a2 =   1 - alpha
+        return Biquad(
+            b0: Float(b0/a0), b1: Float(b1/a0), b2: Float(b2/a0),
+            a1: Float(a1/a0), a2: Float(a2/a0)
+        )
+    }
+    private static func biquadLowPass(sr: Double, fc: Double, q: Double = 0.707) -> Biquad {
+        let w0 = 2.0 * .pi * fc / sr
+        let alpha = sin(w0)/(2.0*q)
+        let cosw = cos(w0)
+        let b0 = (1 - cosw)/2
+        let b1 =  1 - cosw
+        let b2 = (1 - cosw)/2
+        let a0 =  1 + alpha
+        let a1 = -2*cosw
+        let a2 =  1 - alpha
+        return Biquad(
+            b0: Float(b0/a0), b1: Float(b1/a0), b2: Float(b2/a0),
+            a1: Float(a1/a0), a2: Float(a2/a0)
+        )
+    }
+    private static func highShelf(sr: Double, fc: Double, gainDB: Double) -> Biquad {
+        let A = pow(10.0, gainDB/40.0)
+        let w0 = 2.0 * .pi * fc / sr
+        let alpha = sin(w0)/2.0 * sqrt((A + 1/A) * (1/0.707 - 1) + 2)
+        let cosw = cos(w0)
+        let b0 =    A*((A+1) + (A-1)*cosw + 2*sqrt(A)*alpha)
+        let b1 = -2*A*((A-1) + (A+1)*cosw)
+        let b2 =    A*((A+1) + (A-1)*cosw - 2*sqrt(A)*alpha)
+        let a0 =       (A+1) - (A-1)*cosw + 2*sqrt(A)*alpha
+        let a1 =   2*((A-1) - (A+1)*cosw)
+        let a2 =       (A+1) - (A-1)*cosw - 2*sqrt(A)*alpha
+        return Biquad(
+            b0: Float(b0/a0), b1: Float(b1/a0), b2: Float(b2/a0),
+            a1: Float(a1/a0), a2: Float(a2/a0)
+        )
+    }
+    
+    @inline(__always) private static func white() -> Float { Float.random(in: -1...1) }
+    
+    // MARK: - Main filter
+    private static func subliminalAudioFilter(p: Phrase,
+                               hpHz: Double = 300,
+                               lpHz: Double = 3500,
+                               airShelfHz: Double = 6000,
+                               airShelfGainDB: Double = 5,
+                               noiseGain: Float = 0.05,
+                               envAttackMs: Double = 15,
+                               envReleaseMs: Double = 80) -> Phrase {
+        
+        let sr = p.sampleRate
+        
+        var hp = biquadHighPass(sr: sr, fc: hpHz)
+        var lp = biquadLowPass(sr: sr, fc: lpHz)
+        var shelf = highShelf(sr: sr, fc: airShelfHz, gainDB: airShelfGainDB)
+        
+        var out = [Float](repeating: 0, count: p.samples.count)
+        
+        // Simple envelope follower to gate noise where speech energy exists
+        let atk = Float(exp(-1.0 / (sr * envAttackMs / 1000.0)))
+        let rel = Float(exp(-1.0 / (sr * envReleaseMs / 1000.0)))
+        var env: Float = 0
+        
+        for i in 0..<p.samples.count {
+            var x = p.samples[i]
+            x = hp.process(x)
+            x = lp.process(x)
+            x = shelf.process(x)
+            
+            // envelope
+            let a = abs(x)
+            env = (a > env) ? (atk*env + (1 - atk)*a) : (rel*env + (1 - rel)*a)
+            
+            // add a whisper of noise, shaped by envelope (subtle!)
+            let n = white() * noiseGain * min(env * 1.5, 1.0)
+            
+            out[i] = x + n
+        }
+        return Phrase(samples: out, sampleRate: sr)
     }
 }
