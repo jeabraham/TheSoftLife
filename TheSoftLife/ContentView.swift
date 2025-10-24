@@ -39,7 +39,7 @@ struct ContentView: View {
                 Divider()
                 randomControls
                 Spacer()
-                AudioSettingsView()
+                AudioSettingsView().environmentObject(vm)
                 
                 Button("Voice & Speech…") { showVoiceSheet = true }
                     .buttonStyle(.borderedProminent)
@@ -72,6 +72,9 @@ struct ContentView: View {
                     .disabled(vm.folderURL == nil)
                 }
             }
+        }
+        .onChange(of: vm.folderURL) { newFolder in
+            rebuildSubliminalsIfNeeded(folderURL: newFolder)
         }
     }
 
@@ -165,16 +168,22 @@ struct ContentView: View {
     }
     
     struct AudioSettingsView: View {
-        // This key lives in UserDefaults automatically
+        @EnvironmentObject var vm: PlayerVM
         @AppStorage("subliminalBackgrounds") private var subliminalBackgrounds: Bool = false
-
         var body: some View {
             //Form {
                 //Section(header: Text("Audio Backgrounds")) {
-                    Toggle("Subliminal backgrounds", isOn: $subliminalBackgrounds)
-                        .onChange(of: subliminalBackgrounds) { on in
-                            print("[Settings] subliminalBackgrounds →", on)
+                Toggle("Subliminal backgrounds", isOn: $subliminalBackgrounds)
+                    .onChange(of: subliminalBackgrounds) { on in
+                        print("[Settings] subliminalBackgrounds →", on)
+                        if on {
+                            // Launch builder as soon as user turns this ON
+                            DispatchQueue.global(qos: .background).async {
+                                rebuildSubliminalsIfNeeded(folderURL: vm.folderURL)
+                            }
                         }
+                    }
+            
                     //Text("Adds low-level noise + subliminals between files and behind explicit narration.")
                     //    .font(.footnote)
                     //    .foregroundColor(.secondary)
@@ -183,7 +192,9 @@ struct ContentView: View {
             //.navigationTitle("Audio")
         }
     }
+    
 
+    
     @ViewBuilder
     private var randomControls: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -233,6 +244,35 @@ struct ContentView: View {
                  : "Sequential mode")
             .font(.footnote)
             .foregroundColor(.secondary)
+        }
+    }
+}
+
+private func rebuildSubliminalsIfNeeded(folderURL: URL?) {
+    guard AppAudioSettings.subliminalBackgrounds else { return }
+    guard let base = folderURL else { return }
+
+    let userSub = base.appendingPathComponent("subliminals", isDirectory: true)
+    if FileManager.default.fileExists(atPath: userSub.path) {
+        print("[Builder] Found user subliminals folder → rebuilding audio cache…")
+                
+        SubliminalFolderBuilder.buildFromFolder(userSub) { result in
+            switch result {
+            case .success(let urls):
+                print("[Builder] Built \(urls.count) subliminal clips from user folder.")
+            case .failure(let error):
+                print("[Builder] Failed to build user subliminals:", error.localizedDescription)
+            }
+        }
+    } else {
+        print("[Builder] No /subliminals folder → rebuilding from bundle.")
+        SubliminalFolderBuilder.buildFromBundleFolder { result in
+            switch result {
+            case .success(let urls):
+                print("[Builder] Rebuilt bundle subliminals (\(urls.count) clips).")
+            case .failure(let error):
+                print("[Builder] Bundle rebuild failed:", error.localizedDescription)
+            }
         }
     }
 }

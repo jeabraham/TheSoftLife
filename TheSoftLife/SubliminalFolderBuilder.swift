@@ -86,7 +86,17 @@ final class SubliminalFolderBuilder {
                                                          appropriateFor: nil,
                                                          create: true)
                 let rootOut = appSup.appendingPathComponent("subliminals", isDirectory: true)
+                // Clear old output to avoid partial or invalid files
+                if FileManager.default.fileExists(atPath: rootOut.path) {
+                    do {
+                        try FileManager.default.removeItem(at: rootOut)
+                        log("Removed previous subliminals directory:", rootOut.path)
+                    } catch {
+                        log("WARN: Could not clear old subliminals directory:", error.localizedDescription)
+                    }
+                }
                 try FileManager.default.createDirectory(at: rootOut, withIntermediateDirectories: true)
+
                 log("Output root:", rootOut.path)
 
                 let group = DispatchGroup()
@@ -144,7 +154,7 @@ final class SubliminalFolderBuilder {
                             outputURL: outURL
                         ) { ok in
                             // We’re now on MAIN because TTSSynthesizer calls completion on main. Hop back to bg queue:
-                            DispatchQueue.global(qos: backgroundQoS).async {
+                            //DispatchQueue.global(qos: backgroundQoS).async {
                                 if ok {
                                     lock.lock()
                                     outputURLs.append(outURL)
@@ -161,7 +171,7 @@ final class SubliminalFolderBuilder {
                                     log("ERROR:", err.localizedDescription)
                                 }
                                 group.leave()
-                            }
+                            //
                         }
                     }
                 }
@@ -186,6 +196,131 @@ final class SubliminalFolderBuilder {
         }
     }
 
+    /// Build all clips from every .txt in a user-chosen folder.
+    /// The folder should contain category text files (each line = phrase).
+    static func buildFromFolder(
+        _ folderURL: URL,
+        overwrite: Bool = false,
+        includeExisting: Bool = true,
+        backgroundQoS: DispatchQoS.QoSClass = .utility,
+        voice: VoiceOptions = VoiceOptions(),
+        completion: @escaping (Result<[URL], Error>) -> Void
+    ) {
+        // Declare shared objects outside async block to keep them alive
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var outURLs: [URL] = []
+        var firstError: Error?
+
+        DispatchQueue.global(qos: backgroundQoS).async {
+            let t0 = CFAbsoluteTimeGetCurrent()
+            log("BEGIN buildFromFolder:", folderURL.path)
+
+            do {
+                
+                guard FileManager.default.fileExists(atPath: folderURL.path) else {
+                    throw BuilderError.bundleFolderMissing(folderURL.path)
+                }
+
+                let contents = try FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: nil)
+                let txtFiles = contents.filter { $0.pathExtension.lowercased() == "txt" }
+
+                guard !txtFiles.isEmpty else {
+                    throw BuilderError.noTextFilesFound
+                }
+
+                let appSup = try FileManager.default.url(for: .applicationSupportDirectory,
+                                                         in: .userDomainMask,
+                                                         appropriateFor: nil,
+                                                         create: true)
+                let rootOut = appSup.appendingPathComponent("subliminals", isDirectory: true)
+                
+                // Clear old output to avoid partial or invalid files
+                if FileManager.default.fileExists(atPath: rootOut.path) {
+                    do {
+                        try FileManager.default.removeItem(at: rootOut)
+                        log("Removed previous subliminals directory:", rootOut.path)
+                    } catch {
+                        log("WARN: Could not clear old subliminals directory:", error.localizedDescription)
+                    }
+                }
+                try FileManager.default.createDirectory(at: rootOut, withIntermediateDirectories: true)
+
+                for txt in txtFiles {
+                    let category = txt.deletingPathExtension().lastPathComponent
+                    let categoryOut = rootOut.appendingPathComponent(category, isDirectory: true)
+                    try FileManager.default.createDirectory(at: categoryOut, withIntermediateDirectories: true)
+
+                    let raw = try String(contentsOf: txt, encoding: .utf8)
+                    let lines = raw
+                        .components(separatedBy: .newlines)
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+
+                    for (idx, phrase) in lines.enumerated() {
+                        let fname = String(format: "%03d_%@", idx + 1, slug(phrase))
+                        let outURL = categoryOut.appendingPathComponent(fname).appendingPathExtension("m4a")
+
+                        if FileManager.default.fileExists(atPath: outURL.path), !overwrite {
+                            if includeExisting {
+                                lock.lock(); outURLs.append(outURL); lock.unlock()
+                            }
+                            continue
+                        }
+
+                        group.enter()
+                        TTSSynthesizer.shared.synthesizeToFile(
+                            text: phrase,
+                            languageCode: voice.languageCode,
+                            voiceIdentifier: voice.voiceIdentifier,
+                            rate: voice.rate,
+                            pitch: voice.pitch,
+                            outputURL: outURL
+                        ) { ok in
+                            // We’re now on MAIN because TTSSynthesizer calls completion on main. Hop back to bg queue:
+                            //DispatchQueue.global(qos: backgroundQoS).async {
+                                if ok {
+                                    lock.lock()
+                                    //outputURLs.append(outURL)
+                                    //generatedCount += 1
+                                    lock.unlock()
+                                    //if (generatedCount % 20) == 0 {
+                                    //    log("  Synth complete (\(generatedCount)):", outURL.lastPathComponent)
+                                    //}
+                                } else if firstError == nil {
+                                    let err = NSError(domain: "SubliminalFolderBuilder",
+                                                      code: -1,
+                                                      userInfo: [NSLocalizedDescriptionKey: "TTS write failed: \(outURL.lastPathComponent)"])
+                                    firstError = err
+                                    log("ERROR:", err.localizedDescription)
+                                }
+                                group.leave()
+                            //}
+                        }
+                    }
+                }
+
+                // Wait for all to complete before notify; ensures group stays valid
+                group.notify(queue: .global(qos: backgroundQoS)) {
+                    let elapsed = CFAbsoluteTimeGetCurrent() - t0
+                    log("DONE buildFromFolder.", "elapsed=\(String(format: "%.2fs", elapsed))")
+                    DispatchQueue.main.async {
+                        if let e = firstError {
+                            completion(.failure(e))
+                        } else {
+                            completion(.success(outURLs.sorted { $0.path < $1.path }))
+                        }
+                    }
+                }
+
+            } catch {
+                log("FATAL:", error.localizedDescription)
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    
     // MARK: - Helpers
 
     /// Simple file-name slugger: lowercase, ascii, short, safe

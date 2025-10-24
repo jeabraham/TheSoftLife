@@ -274,12 +274,6 @@ enum BackgroundSubliminalFactory {
         if let appSup = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
             let sub = appSup.appendingPathComponent(subliminalsFolderName, isDirectory: true)
             if FileManager.default.fileExists(atPath: sub.path) {
-                // Log category folders for sanity
-                if let cats = try? FileManager.default.contentsOfDirectory(at: sub, includingPropertiesForKeys: [.isDirectoryKey]) {
-                    let folderNames = cats.filter { $0.hasDirectoryPath }.map { $0.lastPathComponent }
-                    if !folderNames.isEmpty { log("Categories:", folderNames.joined(separator: ", ")) }
-                }
-                // RECURSIVE scan to pick up files inside each category
                 addRecursiveFiles(in: sub, label: "Application Support/\(subliminalsFolderName)")
             } else {
                 log("No Application Support folder yet at:", sub.path)
