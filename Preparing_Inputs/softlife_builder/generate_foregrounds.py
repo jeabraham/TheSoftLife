@@ -18,6 +18,7 @@ def process_files(client, cfg, source_dir, out_dir, counter_file, start_counter)
     prompt_template = """
 You are a hypnotic writing assistant. Rewrite or divide the following text into
 {count} short, self-contained files (2–6 sentences each). Maintain calm rhythm and thematic independence.
+Each piece should be complete and self-contained, including necessary context and subjects.
 Return results as a JSON array of objects with keys "title" and "body" only. Do not include any extra commentary.
 
 TEXT:
