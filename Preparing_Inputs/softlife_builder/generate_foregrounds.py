@@ -8,7 +8,7 @@ with open("llm_config.yaml") as f:
 
 client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"])
 
-SOURCE_DIR = "data/group1_source"
+SOURCE_DIR = "data/group2_source"
 OUT_DIR = "output/foreground"
 os.makedirs(OUT_DIR, exist_ok=True)
 
