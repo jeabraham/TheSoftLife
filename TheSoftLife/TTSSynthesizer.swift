@@ -12,6 +12,7 @@ final class TTSSynthesizer: NSObject, AVSpeechSynthesizerDelegate {
                           pitch: Float,
                           outputURL: URL,
                           completion: @escaping (Bool) -> Void) {
+        PlayerVM.shared.updateStatus(tasks: ["TTS: \(outputURL.lastPathComponent)"])
         try? FileManager.default.removeItem(at: outputURL)
         
         let utt = AVSpeechUtterance(string: text)
@@ -53,6 +54,7 @@ final class TTSSynthesizer: NSObject, AVSpeechSynthesizerDelegate {
                 if let attrs = try? FileManager.default.attributesOfItem(atPath: outputURL.path) {
                     print("Synthesized file size:", attrs[.size] ?? "nil")
                 }
+                PlayerVM.shared.updateStatus(tasks: [])
                 DispatchQueue.main.async {
                     completion(succeeded)
                 }

@@ -47,6 +47,7 @@ enum BackgroundSubliminalFactory {
         }
         
         let name = "subliminal-\(ms)ms.m4a"
+        PlayerVM.shared.updateStatus(tasks: ["Building bed: \(name)"])
         let outURL = directory.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: outURL.path) {
             log("Existing file:", outURL.lastPathComponent)
@@ -183,6 +184,7 @@ enum BackgroundSubliminalFactory {
                 written += this
             }
             log("Finished:", name, "| totalFrames=\(totalFrames)", "| inserts=\(insertCount)")
+            PlayerVM.shared.updateStatus(tasks: [])
             memo[key] = outURL
             return outURL
         } catch {
