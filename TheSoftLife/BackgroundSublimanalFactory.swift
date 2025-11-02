@@ -38,7 +38,7 @@ enum BackgroundSubliminalFactory {
     private static var activePhrase: Phrase? = nil
     static var activeIndex: Int = 0 // how many samples already mixed for the active phrase
     
-    static func url(for duration: TimeInterval, in directory: URL) -> URL? {
+    static func build_Audio(for duration: TimeInterval, in directory: URL) -> URL? {
         let ms = max(1, Int((duration * 1000).rounded()))
         let key = "\(ms)@\(directory.standardizedFileURL.path)"
         if let u = memo[key], FileManager.default.fileExists(atPath: u.path) {
@@ -47,7 +47,7 @@ enum BackgroundSubliminalFactory {
         }
         
         let name = "subliminal-\(ms)ms.m4a"
-        PlayerVM.shared.updateStatus(tasks: ["Building bed: \(name)"])
+        PlayerVM.shared?.updateStatus(tasks: ["Building bed: \(name)"])
         let outURL = directory.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: outURL.path) {
             log("Existing file:", outURL.lastPathComponent)
@@ -184,7 +184,7 @@ enum BackgroundSubliminalFactory {
                 written += this
             }
             log("Finished:", name, "| totalFrames=\(totalFrames)", "| inserts=\(insertCount)")
-            PlayerVM.shared.updateStatus(tasks: [])
+            PlayerVM.shared?.updateStatus(tasks: [])
             memo[key] = outURL
             return outURL
         } catch {

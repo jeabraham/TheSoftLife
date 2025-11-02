@@ -4,7 +4,7 @@ enum SilenceFactory {
     // Cache by (duration-ms + directory path) to avoid regenerating
     private static var memo: [String: URL] = [:]
 
-    static func url(for duration: TimeInterval, in directory: URL) -> URL? {
+    static func build_Silent_Audio(for duration: TimeInterval, in directory: URL) -> URL? {
         let ms = max(1, Int((duration * 1000).rounded()))
         let key = "\(ms)@\(directory.standardizedFileURL.path)"
         if let u = memo[key], FileManager.default.fileExists(atPath: u.path) { return u }

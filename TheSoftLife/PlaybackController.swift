@@ -188,22 +188,25 @@ final class PlaybackController: NSObject {
             // If you later add the hybrid path (notification for long gaps),
             // branch here on `gap` vs `shortGapThreshold`. For now we always enqueue silence.
             if gap <= shortGapThreshold {
-                
-                if AppAudioSettings.subliminalBackgrounds == true {
-                    // TODO we should allow the user to choose subliminal or silence.
-                    if let sURL = BackgroundSubliminalFactory.url(for: gap, in: self.cacheDir) {
-                        self.enqueueAfter(item: speechItem, url: sURL)
-                    }   else {
-                        // If silence creation failed, at least keep the buffer growing by scheduling the next pair.
-                        print("⚠️ Failed to create silence; continuing without a gap after \(displayName)")
+                // Heavy generation (bed or silence) can block; do it off the main thread on synthQueue
+                let cacheDir = self.cacheDir
+                let itemRef = speechItem
+                let dispName = displayName
+                self.synthQueue.addOperation {
+                    var sURL: URL?
+                    if AppAudioSettings.subliminalBackgrounds == true {
+                        sURL = BackgroundSubliminalFactory.build_Audio(for: gap, in: cacheDir)
+                    } else {
+                        sURL = SilenceFactory.build_Silent_Audio(for: gap, in: cacheDir)
                     }
-                } else {
-                    // TODO we should allow the user to choose subliminal or silence.
-                    if let sURL = SilenceFactory.url(for: gap, in: self.cacheDir) {
-                        self.enqueueAfter(item: speechItem, url: sURL)
-                    }   else {
-                        // If silence creation failed, at least keep the buffer growing by scheduling the next pair.
-                        print("⚠️ Failed to create silence; continuing without a gap after \(displayName)")
+
+                    DispatchQueue.main.async {
+                        if let sURL = sURL {
+                            self.enqueueAfter(item: itemRef, url: sURL)
+                        } else {
+                            // If silence creation failed, at least keep the buffer growing by scheduling the next pair.
+                            print("⚠️ Failed to create silence; continuing without a gap after \(dispName)")
+                        }
                     }
                 }
             } else {
@@ -532,10 +535,17 @@ final class PlaybackController: NSObject {
     }
 
     private func enqueueSilence(seconds: TimeInterval) {
-        guard let url = SilenceFactory.url(for: seconds, in: cacheDir) else { return }
-        print("🎧 Silence ready:", url.lastPathComponent)
-        _ = enqueueAndMaybePlay(url)
-        dumpQueue("after enqueue SILENCE")
+        // Generate the silence file off the main thread to avoid blocking UI.
+        self.synthQueue.addOperation { [weak self] in
+            guard let self = self else { return }
+            let u = SilenceFactory.build_Silent_Audio(for: seconds, in: self.cacheDir)
+            DispatchQueue.main.async {
+                guard let url = u else { return }
+                print("🎧 Silence ready:", url.lastPathComponent)
+                _ = self.enqueueAndMaybePlay(url)
+                self.dumpQueue("after enqueue SILENCE")
+            }
+        }
     }
 
 
@@ -684,73 +694,83 @@ final class PlaybackController: NSObject {
     }
 
     private func synthOne(fileURL: URL, completion: @escaping (URL?) -> Void) {
-        let raw = (try? Self.extractText(from: fileURL)) ?? ""
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { completion(nil); return }
+        // Run file I/O and heavy work on the synthQueue so we don't block the main thread.
+        synthQueue.addOperation { [weak self] in
+            guard let self = self else { DispatchQueue.main.async { completion(nil) }; return }
 
-        let base = fileURL.deletingPathExtension().lastPathComponent
-        let uniq = UUID().uuidString.prefix(8)
-        // NOTE: you're currently writing PCM buffers. .caf is the correct container for PCM.
-        // If you insist on .m4a here, many files will be rejected as "Cannot Open".
-        let outURL = cacheDir.appendingPathComponent("\(base)-\(uniq).caf") // <- safer than .m4a
+            let raw = (try? Self.extractText(from: fileURL)) ?? ""
+            let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { DispatchQueue.main.async { completion(nil) }; return }
 
-        
-        TTSSynthesizer.shared.synthesizeToFile(
-            text: text,
-            languageCode: settings?.languageCode ?? "en-US",
-            voiceIdentifier: settings?.voiceIdentifier,
-            rate: settings?.rate ?? 0.3,
-            pitch: settings?.pitch ?? 1.0,
-            outputURL: outURL
-        ) { success in
-            guard success else { completion(nil); return }
+            let base = fileURL.deletingPathExtension().lastPathComponent
+            let uniq = UUID().uuidString.prefix(8)
+            // NOTE: you're currently writing PCM buffers. .caf is the correct container for PCM.
+            // If you insist on .m4a here, many files will be rejected as "Cannot Open".
+            let outURL = self.cacheDir.appendingPathComponent("\(base)-\(uniq).caf") // <- safer than .m4a
 
-            self.validatePlayableAsset(url: outURL, retries: 6, delay: 0.08) { ok in
-                guard ok else { completion(nil); return }
+            // Call the TTS synthesizer. Its completion may be invoked on any thread; continue heavy work
+            // on the synthQueue and always call the public completion on the main queue.
+            TTSSynthesizer.shared.synthesizeToFile(
+                text: text,
+                languageCode: self.settings?.languageCode ?? "en-US",
+                voiceIdentifier: self.settings?.voiceIdentifier,
+                rate: self.settings?.rate ?? 0.3,
+                pitch: self.settings?.pitch ?? 1.0,
+                outputURL: outURL
+            ) { success in
+                guard success else { DispatchQueue.main.async { completion(nil) }; return }
 
-                // If we’re not layering, just return the foreground as-is.
-                guard AppAudioSettings.subliminalBackgrounds == true else {
-                    print("[ExplicitOverBed] subliminalBackgrounds=OFF → returning TTS only")
-                    completion(outURL)
-                    return
-                }
+                // Validate asset playability before returning or doing heavy mixing.
+                self.validatePlayableAsset(url: outURL, retries: 6, delay: 0.08) { ok in
+                    guard ok else { DispatchQueue.main.async { completion(nil) }; return }
 
-                // subliminalBackgrounds = true → render bed, duck it, and mix overtop
-                let outDirectory = outURL.deletingLastPathComponent()
-                let fgAsset = AVURLAsset(url: outURL)
-                let fgDur = max(0.25, CMTimeGetSeconds(fgAsset.duration))
-                let bedDur = fgDur + 0.15  // small tail padding
-                print("[ExplicitOverBed] ON. fgDur=\(String(format: "%.2f", fgDur))s, bedDur=\(String(format: "%.2f", bedDur))s")
+                    // If layering is off, return the TTS file as-is.
+                    guard AppAudioSettings.subliminalBackgrounds == true else {
+                        print("[ExplicitOverBed] subliminalBackgrounds=OFF → returning TTS only")
+                        DispatchQueue.main.async { completion(outURL) }
+                        return
+                    }
 
-                // Ask your BackgroundSubliminalFactory for the bed at this duration
-                guard let bedURL = BackgroundSubliminalFactory.url(for: bedDur, in: outDirectory) else {
-                    print("[ExplicitOverBed] Failed to generate bed; returning TTS only")
-                    completion(outURL)
-                    return
-                }
+                    // Prepare to create the bed and mix. Do the heavy generation/mixing on synthQueue.
+                    let outDirectory = outURL.deletingLastPathComponent()
+                    let fgAsset = AVURLAsset(url: outURL)
+                    let fgDur = max(0.25, CMTimeGetSeconds(fgAsset.duration))
+                    let bedDur = fgDur + 0.15  // small tail padding
+                    print("[ExplicitOverBed] ON. fgDur=\(String(format: "%.2f", fgDur))s, bedDur=\(String(format: "%.2f", bedDur))s")
 
-                // Mix into a temporary file, then replace outURL
-                let tmpURL = outDirectory.appendingPathComponent("mix-\(UUID().uuidString.prefix(8)).m4a")
-
-                ExplicitOverBedRenderer.offlineMixPublic(
-                    fgURL: outURL,
-                    bedURL: bedURL,
-                    outURL: tmpURL,
-                    options: ExplicitOverBedRenderer.MixOptions() // use the default options
-                ) { ok in
-                    guard ok else { completion(nil); return }
-
-                    // Replace the original with the mixed file
-                    try? FileManager.default.removeItem(at: outURL)
-                    do {
-                        try FileManager.default.moveItem(at: tmpURL, to: outURL)
-                        self.validatePlayableAsset(url: outURL, retries: 6, delay: 0.08) { ok2 in
-                            print("[ExplicitOverBed] Mixed and replaced → \(ok2 ? "OK" : "Not playable")")
-                            completion(ok2 ? outURL : nil)
+                    self.synthQueue.addOperation {
+                        guard let bedURL = BackgroundSubliminalFactory.build_Audio(for: bedDur, in: outDirectory) else {
+                            print("[ExplicitOverBed] Failed to generate bed; returning TTS only")
+                            DispatchQueue.main.async { completion(outURL) }
+                            return
                         }
-                    } catch {
-                        print("[ExplicitOverBed] Move failed:", error.localizedDescription)
-                        completion(nil)
+
+                        let tmpURL = outDirectory.appendingPathComponent("mix-\(UUID().uuidString.prefix(8)).m4a")
+
+                        ExplicitOverBedRenderer.offlineMixPublic(
+                            fgURL: outURL,
+                            bedURL: bedURL,
+                            outURL: tmpURL,
+                            options: ExplicitOverBedRenderer.MixOptions() // use the default options
+                        ) { mixOk in
+                            guard mixOk else { DispatchQueue.main.async { completion(nil) }; return }
+
+                            // Replace the original with the mixed file
+                            do {
+                                try FileManager.default.removeItem(at: outURL)
+                                try FileManager.default.moveItem(at: tmpURL, to: outURL)
+                            } catch {
+                                print("[ExplicitOverBed] Move failed:", error.localizedDescription)
+                                DispatchQueue.main.async { completion(nil) }
+                                return
+                            }
+
+                            // Final validation, then return on main
+                            self.validatePlayableAsset(url: outURL, retries: 6, delay: 0.08) { ok2 in
+                                print("[ExplicitOverBed] Mixed and replaced → \(ok2 ? "OK" : "Not playable")")
+                                DispatchQueue.main.async { completion(ok2 ? outURL : nil) }
+                            }
+                        }
                     }
                 }
             }

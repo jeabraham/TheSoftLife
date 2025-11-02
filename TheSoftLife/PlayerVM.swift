@@ -4,6 +4,9 @@ import UniformTypeIdentifiers
 
 final class PlayerVM: NSObject, ObservableObject {
     // UI state
+    
+    static weak var shared: PlayerVM?
+    
     @Published var folderURL: URL?
     @Published var currentFileName = "—"
     @Published var isPlaying = false
