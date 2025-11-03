@@ -17,16 +17,28 @@ final class PlayerVM: NSObject, ObservableObject {
     @Published var canControlPlayback = false
 
     // Voice/rate settings
-    @Published var rate: Float = 0.3
-    @Published var pitch: Float = 1.0
-    @Published var languageCode = "en-CA"
-    @Published var voiceIdentifier: String? = nil
+    @Published var rate: Float = 0.3 {
+        didSet { updateControllerSettingsIfNeeded() }
+    }
+    @Published var pitch: Float = 1.0 {
+        didSet { updateControllerSettingsIfNeeded() }
+    }
+    @Published var languageCode = "en-CA" {
+        didSet { updateControllerSettingsIfNeeded() }
+    }
+    @Published var voiceIdentifier: String? = nil {
+        didSet { updateControllerSettingsIfNeeded() }
+    }
     @Published var voices: [AVSpeechSynthesisVoice] = AVSpeechSynthesisVoice.speechVoices()
 
     // Add next to your other @Published settings
     @Published var randomLoopEnabled: Bool = false
-    @Published var minDelaySec: Double = 5
-    @Published var maxDelaySec: Double = 20
+    @Published var minDelaySec: Double = 5 {
+        didSet { updateControllerDelayRangeIfNeeded() }
+    }
+    @Published var maxDelaySec: Double = 20 {
+        didSet { updateControllerDelayRangeIfNeeded() }
+    }
     @Published var useNotificationForLongGaps: Bool = false   // for later; not used yet
     
     @Published var activeTasks: [String] = []  // <- for TTS/mixing/silence tasks
@@ -101,6 +113,32 @@ final class PlayerVM: NSObject, ObservableObject {
     func pauseResume() { controller.pauseResume() }
     func stopTapped() { showStopConfirm = true }
     func stopConfirmed() { controller.stop() }
+
+    // MARK: - Dynamic Settings Update
+    
+    /// Updates the controller's playback settings when voice/rate/pitch settings change
+    private func updateControllerSettingsIfNeeded() {
+        // Only update if playback is active
+        guard canControlPlayback else { return }
+        
+        let settings = PlaybackSettings(
+            rate: rate,
+            pitch: pitch,
+            languageCode: languageCode,
+            voiceIdentifier: voiceIdentifier
+        )
+        controller.updateSettings(settings)
+    }
+    
+    /// Updates the controller's random delay range when minDelay/maxDelay settings change
+    private func updateControllerDelayRangeIfNeeded() {
+        // Only update if playback is active and in random loop mode
+        guard canControlPlayback, randomLoopEnabled else { return }
+        
+        let a = minDelaySec, b = maxDelaySec
+        let (lo, hi) = a <= b ? (a, b) : (b, a)
+        controller.updateRandomDelayRange(minDelay: lo, maxDelay: hi)
+    }
 
     // MARK: - Voices
     func reloadVoices() {

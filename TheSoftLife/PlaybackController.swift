@@ -353,6 +353,19 @@ final class PlaybackController: NSObject {
         }
     }
 
+    /// Update playback settings while session is running.
+    /// Future items in the queue will use the new settings.
+    func updateSettings(_ newSettings: PlaybackSettings) {
+        self.settings = newSettings
+    }
+
+    /// Update random loop delay range while session is running.
+    /// Future random pairs will use the new delay range.
+    func updateRandomDelayRange(minDelay: TimeInterval, maxDelay: TimeInterval) {
+        randomMinSilence = min(minDelay, maxDelay)
+        randomMaxSilence = max(minDelay, maxDelay)
+    }
+
     func pauseResume() {
         if player.timeControlStatus == .paused {
             ensureActiveAudioSession()
