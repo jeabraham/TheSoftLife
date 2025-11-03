@@ -3,11 +3,14 @@ import yaml
 import argparse
 from openai import OpenAI  # or your local client wrapper
 
+from softlife_builder.generate_foregrounds import chunk_text
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate subliminal files from source texts.")
     parser.add_argument("--source-dir", default="data/group2_source", help="Source directory containing input files")
     parser.add_argument("--out-dir", default="output/subliminals", help="Output directory for generated files")
+    parser.add_argument("--chunk-size", type=int, default=2000, help="Maximum characters per chunk when splitting text")
     return parser.parse_args()
 
 
@@ -23,7 +26,7 @@ def main():
 
 
     prompt_template = prompt = """
-    Extract 20 short, punchy affirmations (3–12 words each) from this text.
+    Extract 10 short, punchy affirmations (3–12 words each) from this text.
     Each should be independent and emotionally charged.
     Return as one line per affirmation, do not number the lines
     
@@ -37,22 +40,25 @@ def main():
         with open(os.path.join(args.source_dir, filename)) as f:
             text = f.read()
 
-        prompt = prompt_template.format(count=7, source=text)
-
-        response = client.chat.completions.create(
-            model=cfg["model"],
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.8,
-            max_tokens=1500,
-        )
-
-        outputs = response.choices[0].message.content.splitlines()
-        fname = f"{os.path.splitext(filename)[0]}_subliminals.txt"
-        with open(os.path.join(args.out_dir, fname), "a") as out:
-            for line in outputs:
-                # Ollama / Mistral really wants to number the affirmations. So, we remove the numbers.
-                out.write(''.join(char for char in line.strip() if not (char.isdigit() or (char == '.' and any(
-                    c.isdigit() for c in line[max(0, line.index(char) - 1):line.index(char)])))) + "\n")
+        text_chunks = chunk_text(text, args.chunk_size)
+        for chunk in text_chunks:
+    
+            prompt = prompt_template.format(count=7, source=chunk)
+    
+            response = client.chat.completions.create(
+                model=cfg["model"],
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.8,
+                max_tokens=1500,
+            )
+    
+            outputs = response.choices[0].message.content.splitlines()
+            fname = f"{os.path.splitext(filename)[0]}_subliminals_{text_chunks.index(chunk):03d}.txt"
+            with open(os.path.join(args.out_dir, fname), "a") as out:
+                for line in outputs:
+                    # Ollama / Mistral really wants to number the affirmations. So, we remove the numbers.
+                    out.write(''.join(char for char in line.strip() if not (char.isdigit() or (char == '.' and any(
+                        c.isdigit() for c in line[max(0, line.index(char) - 1):line.index(char)])))) + "\n")
 
 if __name__ == "__main__":
     main()
