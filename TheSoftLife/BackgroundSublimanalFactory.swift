@@ -38,6 +38,23 @@ enum BackgroundSubliminalFactory {
     private static var activePhrase: Phrase? = nil
     static var activeIndex: Int = 0 // how many samples already mixed for the active phrase
     
+    // Cached decoded subliminal phrases. These are expensive to decode, so we keep
+    // them in memory and refresh on demand (off the main queue) via
+    // `refreshPhrases(sampleRate:completion:)`.
+    private static var _cachedPhrases: [Phrase] = []
+    private static let phrasesQueue = DispatchQueue(label: "BackgroundSubliminalFactory.phrasesQueue")
+    
+    /// Refresh the cached subliminal phrases. This runs the decode work off the
+    /// main queue. Callers can provide an optional completion that is invoked on
+    /// the main queue with the number of phrases loaded.
+    static func refreshPhrases(sampleRate: Double = 44_100, completion: ((Int)->Void)? = nil) {
+        DispatchQueue.global(qos: .utility).async {
+            let loaded = loadSubliminalFiles(sampleRate: sampleRate)
+            phrasesQueue.sync { _cachedPhrases = loaded }
+            DispatchQueue.main.async { completion?(loaded.count) }
+        }
+    }
+    
     static func build_Audio(for duration: TimeInterval, in directory: URL) -> URL? {
         let ms = max(1, Int((duration * 1000).rounded()))
         let key = "\(ms)@\(directory.standardizedFileURL.path)"
@@ -78,8 +95,23 @@ enum BackgroundSubliminalFactory {
             
             guard let buf = AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: AVAudioFrameCount(chunk)) else { return nil }
             
-            // Preload subliminal clips (optional)
-            let phrases = enableSubliminals ? loadSubliminalFiles(sampleRate: sr) : []
+            // Preload subliminal clips (optional). Use cached phrases if available
+            // so we don't re-decode every time. If cache is empty, fall back to
+            // decoding synchronously (preserves previous behavior).
+            let phrases: [Phrase]
+            if enableSubliminals {
+                let cached = phrasesQueue.sync { _cachedPhrases }
+                if !cached.isEmpty {
+                    phrases = cached
+                } else {
+                    // Synchronous fallback: decode now (was previous behavior).
+                    let decoded = loadSubliminalFiles(sampleRate: sr)
+                    phrasesQueue.sync { _cachedPhrases = decoded }
+                    phrases = decoded
+                }
+            } else {
+                phrases = []
+            }
             log("Phrases loaded:", phrases.count)
             if phrases.isEmpty && enableSubliminals {
                 log("WARN: enableSubliminals=true but no phrases loaded")
@@ -512,5 +544,15 @@ enum BackgroundSubliminalFactory {
             out[i] = x + n
         }
         return Phrase(samples: out, sampleRate: sr)
+    }
+    
+    /// Clear the in-memory phrase cache. Safe to call from any thread.
+    static func clearCachedPhrases() {
+        phrasesQueue.sync { _cachedPhrases.removeAll() }
+    }
+    
+    /// Number of phrases currently cached in memory (thread-safe).
+    static var cachedPhrasesCount: Int {
+        phrasesQueue.sync { _cachedPhrases.count }
     }
 }
