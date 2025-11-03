@@ -266,6 +266,10 @@ private func rebuildSubliminalsIfNeeded(folderURL: URL?) {
     guard AppAudioSettings.subliminalBackgrounds else { return }
     guard let base = folderURL else { return }
 
+    // Clear the in-memory cache of subliminal phrases when switching folders
+    BackgroundSubliminalFactory.clearCachedPhrases()
+    print("[Builder] Cleared cached subliminal phrases")
+
     let userSub = base.appendingPathComponent("subliminals", isDirectory: true)
     if FileManager.default.fileExists(atPath: userSub.path) {
         print("[Builder] Found user subliminals folder → rebuilding audio cache…")
