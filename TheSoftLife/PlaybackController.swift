@@ -353,6 +353,35 @@ final class PlaybackController: NSObject {
         }
     }
 
+    /// Update playback settings while session is running.
+    /// Future items in the queue will use the new settings.
+    func updateSettings(_ newSettings: PlaybackSettings) {
+        // Ensure thread-safe update on main queue
+        if Thread.isMainThread {
+            self.settings = newSettings
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.settings = newSettings
+            }
+        }
+    }
+
+    /// Update random loop delay range while session is running.
+    /// Future random pairs will use the new delay range.
+    func updateRandomDelayRange(minDelay: TimeInterval, maxDelay: TimeInterval) {
+        // Ensure thread-safe update on main queue
+        if Thread.isMainThread {
+            self.randomMinSilence = min(minDelay, maxDelay)
+            self.randomMaxSilence = max(minDelay, maxDelay)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.randomMinSilence = min(minDelay, maxDelay)
+                self.randomMaxSilence = max(minDelay, maxDelay)
+            }
+        }
+    }
+
     func pauseResume() {
         if player.timeControlStatus == .paused {
             ensureActiveAudioSession()
@@ -694,6 +723,9 @@ final class PlaybackController: NSObject {
     }
 
     private func synthOne(fileURL: URL, completion: @escaping (URL?) -> Void) {
+        // Capture settings on the calling thread to avoid race conditions
+        let currentSettings = self.settings
+        
         // Run file I/O and heavy work on the synthQueue so we don't block the main thread.
         synthQueue.addOperation { [weak self] in
             guard let self = self else { DispatchQueue.main.async { completion(nil) }; return }
@@ -712,10 +744,10 @@ final class PlaybackController: NSObject {
             // on the synthQueue and always call the public completion on the main queue.
             TTSSynthesizer.shared.synthesizeToFile(
                 text: text,
-                languageCode: self.settings?.languageCode ?? "en-US",
-                voiceIdentifier: self.settings?.voiceIdentifier,
-                rate: self.settings?.rate ?? 0.3,
-                pitch: self.settings?.pitch ?? 1.0,
+                languageCode: currentSettings?.languageCode ?? "en-US",
+                voiceIdentifier: currentSettings?.voiceIdentifier,
+                rate: currentSettings?.rate ?? 0.3,
+                pitch: currentSettings?.pitch ?? 1.0,
                 outputURL: outURL
             ) { success in
                 guard success else { DispatchQueue.main.async { completion(nil) }; return }
