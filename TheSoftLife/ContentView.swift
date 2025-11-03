@@ -24,6 +24,17 @@ struct ContentView: View {
                     Text("Folder: \(vm.folderURL?.lastPathComponent ?? "—")")
                     Text("Now Playing: \(vm.currentFileName)")
                     Text(vm.statusText).font(.subheadline).foregroundColor(.secondary)
+                    if !vm.activeTasks.isEmpty {
+                        VStack(alignment: .leading) {
+                            Text("Active Tasks:")
+                                .font(.subheadline).bold()
+                            ForEach(vm.activeTasks, id: \.self) { task in
+                                Text("• \(task)")
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
                     ProgressView(value: Double(vm.processedFiles), total: Double(max(vm.totalFiles, 1)))
                 }
                 .font(.headline)                // … your header / status UI …
@@ -75,6 +86,9 @@ struct ContentView: View {
         }
         .onChange(of: vm.folderURL) { newFolder in
             rebuildSubliminalsIfNeeded(folderURL: newFolder)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            vm.updateStatus()     // refresh visible file/task status
         }
     }
 

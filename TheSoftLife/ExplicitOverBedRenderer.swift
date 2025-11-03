@@ -66,7 +66,7 @@ enum ExplicitOverBedRenderer {
                 log("TTS ok:", String(format: "%.2fs", fgDurSec), "→ bed dur:", String(format: "%.2fs", bedDur))
 
                 // 3) Bed (noise + subliminal)
-                guard let bedURL = BackgroundSubliminalFactory.url(for: bedDur, in: directory) else {
+                guard let bedURL = BackgroundSubliminalFactory.build_Audio(for: bedDur, in: directory) else {
                     log("Bed generation failed")
                     completion(nil)
                     return

@@ -4,6 +4,9 @@ import UniformTypeIdentifiers
 
 final class PlayerVM: NSObject, ObservableObject {
     // UI state
+    
+    static weak var shared: PlayerVM?
+    
     @Published var folderURL: URL?
     @Published var currentFileName = "—"
     @Published var isPlaying = false
@@ -26,6 +29,9 @@ final class PlayerVM: NSObject, ObservableObject {
     @Published var maxDelaySec: Double = 20
     @Published var useNotificationForLongGaps: Bool = false   // for later; not used yet
     
+    @Published var activeTasks: [String] = []  // <- for TTS/mixing/silence tasks
+
+    
     var minGapSeconds: TimeInterval = 60   // example
     var maxGapSeconds: TimeInterval = 3600 // example
     var shortGapThreshold: TimeInterval = 180 // ≤3 minutes -> use silence
@@ -44,6 +50,21 @@ final class PlayerVM: NSObject, ObservableObject {
         reloadVoices()
         refreshDefaultVoiceIfNeeded()
         restoreBookmarkedFolderIfAny()
+    }
+    
+    // MARK: - Status updates
+    func updateStatus(nowPlaying: String? = nil, tasks: [String]? = nil) {
+        if let n = nowPlaying { currentFileName = n }
+        if let t = tasks { activeTasks = t }
+        statusText = buildStatusLine()
+    }
+
+    private func buildStatusLine() -> String {
+        var parts: [String] = []
+        if !activeTasks.isEmpty {
+            parts.append("Processing: " + activeTasks.joined(separator: ", "))
+        }
+        return parts.isEmpty ? "Idle" : parts.joined(separator: " • ")
     }
 
     // MARK: - Session controls (delegate to controller)
