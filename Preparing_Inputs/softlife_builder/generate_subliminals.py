@@ -3,7 +3,7 @@ import yaml
 import argparse
 from openai import OpenAI  # or your local client wrapper
 
-from softlife_builder.generate_foregrounds import chunk_text
+from generate_foregrounds import chunk_text
 
 
 def parse_args():
