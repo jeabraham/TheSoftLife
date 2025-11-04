@@ -87,7 +87,7 @@ TEXT:
 """
 
     try:
-        for filename in os.listdir(source_dir):
+        for filename in sorted(os.listdir(source_dir)):
             if not filename.endswith(".txt"):
                 continue
 
