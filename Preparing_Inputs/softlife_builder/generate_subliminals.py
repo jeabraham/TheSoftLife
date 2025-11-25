@@ -1,5 +1,6 @@
 import os
-from io import TextIOWrapper, _WrappedBuffer
+from io import TextIOWrapper
+from typing import Any
 
 import yaml
 import argparse
@@ -49,7 +50,7 @@ def main():
                 write_lines(out, outputs)
 
 
-def write_lines(out: TextIOWrapper[_WrappedBuffer], outputs):
+def write_lines(out: TextIOWrapper, outputs):
     for line in outputs:
         # Ollama / Mistral really wants to number the affirmations. So, we remove the numbers.
         out.write(''.join(char for char in line.strip() if not (char.isdigit() or (char == '.' and any(
