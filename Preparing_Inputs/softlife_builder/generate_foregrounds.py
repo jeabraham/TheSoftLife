@@ -66,7 +66,7 @@ def chunk_text(text, max_length):
 
     return chunks
 
-def process_files(client, cfg, source_dir, out_dir, counter_file, start_counter, chunk_size, files_per_chunk):
+def process_files(client, cfg, source_dir, *, out_dir, counter_file, start_counter, chunk_size, files_per_chunk):
     # If start_counter is provided, use it and ignore any existing counter file.
     # If not provided (None), fall back to the persistent counter file or 1.
     global_counter = start_counter if start_counter is not None else 1
@@ -189,8 +189,16 @@ def main():
     counter_file = "counter.txt"
 
     os.makedirs(args.out_dir, exist_ok=True)
-    process_files(client, cfg, args.source_dir, args.out_dir, counter_file, args.start_counter, args.chunk_size, args.files_per_chunk)
-
+    process_files(
+        client=client,
+        cfg=cfg,
+        source_dir=args.source_dir,
+        out_dir=args.out_dir,
+        counter_file=counter_file,
+        start_counter=args.start_counter,
+        chunk_size=args.chunk_size,
+        files_per_chunk=args.files_per_chunk,
+    )
 
 if __name__ == "__main__":
     main()
