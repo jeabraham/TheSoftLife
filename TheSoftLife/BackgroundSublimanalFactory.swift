@@ -2,6 +2,8 @@ import AVFoundation
 import Accelerate
 
 
+
+
 /// Generates background noise with optional subliminal phrase overlays,
 /// cached by (duration + directory) just like SilenceFactory.
 enum BackgroundSubliminalFactory {
@@ -163,8 +165,9 @@ enum BackgroundSubliminalFactory {
                         log("Insert finished (spillover complete) at abs frame:", frameStart + this)
                         activePhrase = nil
                         activeIndex = 0
-                    } else {
-                        log("Insert continuing, mixed \(mixedNow) more frames, progress \(activeIndex)/\(phrase.samples.count)")
+                        //                    } else {
+                        //                        log("Insert continuing, mixed \(mixedNow) more frames, progress \(activeIndex)/\(phrase.samples.count)")
+                        //                    }
                     }
                 }
                 
@@ -176,6 +179,7 @@ enum BackgroundSubliminalFactory {
                         nextInsertFrame = frameStart
                     }
                     let phrase = phrases.randomElement()!
+                    log("Insert \(insertCount+1) START @ frame \(nextInsertFrame) ... phrase=\(phrase.name)")
                     let startOffset = nextInsertFrame - frameStart
                     let phraseFrames = phrase.samples.count
                     let secs = Double(phraseFrames) / sr
@@ -243,6 +247,7 @@ enum BackgroundSubliminalFactory {
     
     // A lightweight container for a mono phrase clip already at target sample rate.
     private struct Phrase {
+        let name: String
         let samples: [Float]
         let sampleRate: Double
     }
@@ -324,6 +329,11 @@ enum BackgroundSubliminalFactory {
         var phrases: [Phrase] = []
         var failCount = 0
         for (i, u) in urls.enumerated() {
+            DispatchQueue.main.async {
+                let name = u.lastPathComponent
+                PlayerVM.shared?.updateStatus(tasks: ["Decoding \(i + 1)/\(urls.count): \(name)"])
+            }
+
             if let p = decodeMono(url: u, targetSR: sr) {
                 let q = subliminalAudioFilter(p: p)
                 phrases.append(q)
@@ -390,7 +400,7 @@ enum BackgroundSubliminalFactory {
                 mono = out
             }
             
-            return Phrase(samples: mono, sampleRate: targetSR)
+            return Phrase(name: url.lastPathComponent, samples: mono, sampleRate: targetSR)
         } catch {
             print("decodeMono error:", error)
             return nil
@@ -543,7 +553,7 @@ enum BackgroundSubliminalFactory {
             
             out[i] = x + n
         }
-        return Phrase(samples: out, sampleRate: sr)
+        return Phrase(name: p.name, samples: out, sampleRate: sr)
     }
     
     /// Clear the in-memory phrase cache. Safe to call from any thread.

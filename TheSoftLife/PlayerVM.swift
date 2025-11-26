@@ -52,6 +52,14 @@ final class PlayerVM: NSObject, ObservableObject {
     @Published var mode: PlaybackMode = .sequential
     private let tracker = AnalyticsTracker() // placeholder for future use
     private let controller = PlaybackController()
+    
+    let synthQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "com.thesoftlife.synthQueue"
+        q.qualityOfService = .utility
+        q.maxConcurrentOperationCount = 1 // serialize synth tasks so foreground work queues behind subliminal builds
+        return q
+    }()
 
     // Bookmark key
     private let bookmarkKey = "chosenFolderBookmark"

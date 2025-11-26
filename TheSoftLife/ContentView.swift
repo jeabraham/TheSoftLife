@@ -85,7 +85,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: vm.folderURL) { newFolder in
-            rebuildSubliminalsIfNeeded(folderURL: newFolder)
+            rebuildSubliminalsIfNeeded(folderURL: newFolder, vm: vm)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             vm.updateStatus()     // refresh visible file/task status
@@ -193,7 +193,7 @@ struct ContentView: View {
                         if on {
                             // Launch builder as soon as user turns this ON
                             DispatchQueue.global(qos: .background).async {
-                                rebuildSubliminalsIfNeeded(folderURL: vm.folderURL)
+                                rebuildSubliminalsIfNeeded(folderURL: vm.folderURL, vm: vm)
                             }
                         }
                     }
@@ -262,34 +262,64 @@ struct ContentView: View {
     }
 }
 
-private func rebuildSubliminalsIfNeeded(folderURL: URL?) {
+// Replace the free function with this updated implementation:
+// Swift
+private func rebuildSubliminalsIfNeeded(folderURL: URL?, vm: PlayerVM) {
     guard AppAudioSettings.subliminalBackgrounds else { return }
     guard let base = folderURL else { return }
 
-    // Clear the in-memory cache of subliminal phrases when switching folders
     BackgroundSubliminalFactory.clearCachedPhrases()
     print("[Builder] Cleared cached subliminal phrases")
+
+    // Helper to forward builder progress into the VM status on the main thread
+    let progress: (String) -> Void = { msg in
+        DispatchQueue.main.async {
+            vm.statusText = msg
+        }
+    }
+
+    // Centralized main-thread setter to avoid publishing from background threads
+    func setStatus(_ text: String) {
+        DispatchQueue.main.async {
+            vm.statusText = text
+        }
+    }
+
+    // Use the VM's synth queue if available so foreground work queues behind these builds.
+    let synthQueue = vm.synthQueue
 
     let userSub = base.appendingPathComponent("subliminals", isDirectory: true)
     if FileManager.default.fileExists(atPath: userSub.path) {
         print("[Builder] Found user subliminals folder → rebuilding audio cache…")
-                
-        SubliminalFolderBuilder.buildFromFolder(userSub) { result in
+        setStatus("Rebuilding user subliminals…")
+        SubliminalFolderBuilder.buildFromFolder(
+            userSub,
+            synthQueue: synthQueue,
+            progress: progress
+        ) { result in
             switch result {
             case .success(let urls):
                 print("[Builder] Built \(urls.count) subliminal clips from user folder.")
+                setStatus("Built \(urls.count) subliminal clips.")
             case .failure(let error):
                 print("[Builder] Failed to build user subliminals:", error.localizedDescription)
+                setStatus("Subliminal build failed: \(error.localizedDescription)")
             }
         }
     } else {
         print("[Builder] No /subliminals folder → rebuilding from bundle.")
-        SubliminalFolderBuilder.buildFromBundleFolder { result in
+        setStatus("Rebuilding bundle subliminals…")
+        SubliminalFolderBuilder.buildFromBundleFolder(
+            synthQueue: synthQueue,
+            progress: progress
+        ) { result in
             switch result {
             case .success(let urls):
                 print("[Builder] Rebuilt bundle subliminals (\(urls.count) clips).")
+                setStatus("Rebuilt bundle subliminals (\(urls.count)).")
             case .failure(let error):
                 print("[Builder] Bundle rebuild failed:", error.localizedDescription)
+                setStatus("Bundle rebuild failed: \(error.localizedDescription)")
             }
         }
     }

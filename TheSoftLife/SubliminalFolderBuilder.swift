@@ -1,3 +1,4 @@
+// swift
 import Foundation
 import AVFoundation
 
@@ -11,7 +12,7 @@ import AVFoundation
 /// Output structure:
 ///   Application Support / subliminals / <category> / 001_<slug>.m4a
 ///
-/// Heavy work runs off the main queue. Completion is called on the main queue.
+/// Heavy work runs off the main queue (or on the provided `synthQueue`). `completion` and `progress` are called on the main queue.
 final class SubliminalFolderBuilder {
 
     /// Turn console logging on/off globally for this builder.
@@ -39,24 +40,32 @@ final class SubliminalFolderBuilder {
     ///   - bundleFolderName: e.g. "subliminal_phrases"
     ///   - overwrite: if true, regenerates files; if false, skips existing
     ///   - includeExisting: if true, existing files are included in the returned list
-    ///   - backgroundQoS: background queue QoS
+    ///   - backgroundQoS: background queue QoS (used when synthQueue is not provided)
     ///   - voice: TTS voice settings
+    ///   - synthQueue: optional `OperationQueue` to run the entire build on (use this to serialize with foreground builds)
+    ///   - progress: optional closure called on the main queue with status messages
     ///   - completion: called on main queue with all generated (and optionally existing) URLs
     static func buildFromBundleFolder(_ bundleFolderName: String = "subliminal_phrases",
                                       overwrite: Bool = false,
                                       includeExisting: Bool = true,
                                       backgroundQoS: DispatchQoS.QoSClass = .utility,
                                       voice: VoiceOptions = VoiceOptions(),
+                                      synthQueue: OperationQueue? = nil,
+                                      progress: ((String) -> Void)? = nil,
                                       completion: @escaping (Result<[URL], Error>) -> Void)
     {
-        // Jump off the main queue immediately
-        DispatchQueue.global(qos: backgroundQoS).async {
+        func sendProgress(_ s: String) {
+            DispatchQueue.main.async { progress?(s) }
+        }
+
+        let work: () -> Void = {
             let t0 = CFAbsoluteTimeGetCurrent()
             log("BEGIN buildFromBundleFolder:",
                 "folder=\(bundleFolderName)",
                 "overwrite=\(overwrite)",
                 "includeExisting=\(includeExisting)",
                 "qos=\(backgroundQoS)")
+            sendProgress("Starting subliminal build…")
 
             do {
                 // Locate the folder in the bundle
@@ -113,6 +122,7 @@ final class SubliminalFolderBuilder {
                     let categoryOut = rootOut.appendingPathComponent(category, isDirectory: true)
                     try FileManager.default.createDirectory(at: categoryOut, withIntermediateDirectories: true)
                     log("Category:", category, "→", categoryOut.lastPathComponent)
+                    sendProgress("Processing category: \(category)")
 
                     // Read lines
                     let raw = try String(contentsOf: txt, encoding: .utf8)
@@ -122,6 +132,7 @@ final class SubliminalFolderBuilder {
                         .filter { !$0.isEmpty && !$0.hasPrefix("#") }
 
                     log("  Lines to synthesize:", lines.count)
+                    sendProgress("Lines to synthesize: \(lines.count) in \(category)")
 
                     for (idx, phrase) in lines.enumerated() {
                         let fname = String(format: "%03d_%@", idx + 1, slug(phrase))
@@ -141,10 +152,11 @@ final class SubliminalFolderBuilder {
                             log("  Queue synth:", "\"\(phrase)\"",
                                 "→", outURL.lastPathComponent)
                         }
+                        if queuedCount % 10 == 0 { sendProgress("Queued \(queuedCount) subliminal clips…") }
 
                         group.enter()
 
-                        // Your TTSSynthesizer completion fires on MAIN—bridge it safely.
+                        // TTSSynthesizer calls completion on MAIN. We rely on the DispatchGroup to wait for them below.
                         TTSSynthesizer.shared.synthesizeToFile(
                             text: phrase,
                             languageCode: voice.languageCode,
@@ -153,71 +165,80 @@ final class SubliminalFolderBuilder {
                             pitch: voice.pitch,
                             outputURL: outURL
                         ) { ok in
-                            // We’re now on MAIN because TTSSynthesizer calls completion on main. Hop back to bg queue:
-                            //DispatchQueue.global(qos: backgroundQoS).async {
-                                if ok {
-                                    lock.lock()
-                                    outputURLs.append(outURL)
-                                    generatedCount += 1
-                                    lock.unlock()
-                                    if (generatedCount % 20) == 0 {
-                                        log("  Synth complete (\(generatedCount)):", outURL.lastPathComponent)
-                                    }
-                                } else if firstError == nil {
-                                    let err = NSError(domain: "SubliminalFolderBuilder",
-                                                      code: -1,
-                                                      userInfo: [NSLocalizedDescriptionKey: "TTS write failed: \(outURL.lastPathComponent)"])
-                                    firstError = err
-                                    log("ERROR:", err.localizedDescription)
+                            if ok {
+                                lock.lock()
+                                outputURLs.append(outURL)
+                                generatedCount += 1
+                                lock.unlock()
+                                if (generatedCount % 20) == 0 {
+                                    log("  Synth complete (\(generatedCount)):", outURL.lastPathComponent)
+                                    sendProgress("Synthesized \(generatedCount) clips…")
                                 }
-                                group.leave()
-                            //
+                            } else if firstError == nil {
+                                let err = NSError(domain: "SubliminalFolderBuilder",
+                                                  code: -1,
+                                                  userInfo: [NSLocalizedDescriptionKey: "TTS write failed: \(outURL.lastPathComponent)"])
+                                firstError = err
+                                log("ERROR:", err.localizedDescription)
+                                sendProgress("Error synthesizing: \(outURL.lastPathComponent)")
+                            }
+                            group.leave()
                         }
                     }
                 }
 
-                group.notify(queue: .global(qos: backgroundQoS)) {
-                    let elapsed = CFAbsoluteTimeGetCurrent() - t0
-                    log("DONE buildFromBundleFolder.",
-                        "generated=\(generatedCount)",
-                        "skipped=\(skippedCount)",
-                        "queued=\(queuedCount)",
-                        String(format: "elapsed=%.2fs", elapsed))
-                    // Return results on MAIN for UI safety
-                    DispatchQueue.main.async {
-                        if let e = firstError { completion(.failure(e)) }
-                        else { completion(.success(outputURLs.sorted { $0.path < $1.path })) }
-                    }
+                // Wait for the TTS callbacks to finish before returning from the work block.
+                group.wait()
+
+                let elapsed = CFAbsoluteTimeGetCurrent() - t0
+                log("DONE buildFromBundleFolder.",
+                    "generated=\(generatedCount)",
+                    "skipped=\(skippedCount)",
+                    "queued=\(queuedCount)",
+                    String(format: "elapsed=%.2fs", elapsed))
+                sendProgress("Subliminal build complete: \(generatedCount) generated.")
+                // Return results on MAIN for UI safety
+                DispatchQueue.main.async {
+                    if let e = firstError { completion(.failure(e)) }
+                    else { completion(.success(outputURLs.sorted { $0.path < $1.path })) }
                 }
             } catch {
                 log("FATAL:", error.localizedDescription)
                 DispatchQueue.main.async { completion(.failure(error)) }
             }
         }
+
+        // If a synthQueue is provided, run the entire build as an Operation so other work can be queued behind it.
+        if let opQueue = synthQueue {
+            opQueue.addOperation { work() }
+        } else {
+            DispatchQueue.global(qos: backgroundQoS).async { work() }
+        }
     }
 
     /// Build all clips from every .txt in a user-chosen folder.
-    /// The folder should contain category text files (each line = phrase).
+    /// See `buildFromBundleFolder` for explanations of `synthQueue` and `progress`.
     static func buildFromFolder(
         _ folderURL: URL,
         overwrite: Bool = false,
         includeExisting: Bool = true,
         backgroundQoS: DispatchQoS.QoSClass = .utility,
         voice: VoiceOptions = VoiceOptions(),
+        synthQueue: OperationQueue? = nil,
+        progress: ((String) -> Void)? = nil,
         completion: @escaping (Result<[URL], Error>) -> Void
     ) {
-        // Declare shared objects outside async block to keep them alive
-        let group = DispatchGroup()
-        let lock = NSLock()
-        var outURLs: [URL] = []
-        var firstError: Error?
+        func sendProgress(_ s: String) {
+            DispatchQueue.main.async { progress?(s) }
+        }
 
-        DispatchQueue.global(qos: backgroundQoS).async {
+        let work: () -> Void = {
             let t0 = CFAbsoluteTimeGetCurrent()
             log("BEGIN buildFromFolder:", folderURL.path)
+            sendProgress("Starting subliminal build from folder…")
 
             do {
-                
+
                 guard FileManager.default.fileExists(atPath: folderURL.path) else {
                     throw BuilderError.bundleFolderMissing(folderURL.path)
                 }
@@ -234,7 +255,7 @@ final class SubliminalFolderBuilder {
                                                          appropriateFor: nil,
                                                          create: true)
                 let rootOut = appSup.appendingPathComponent("subliminals", isDirectory: true)
-                
+
                 // Clear old output to avoid partial or invalid files
                 if FileManager.default.fileExists(atPath: rootOut.path) {
                     do {
@@ -245,6 +266,13 @@ final class SubliminalFolderBuilder {
                     }
                 }
                 try FileManager.default.createDirectory(at: rootOut, withIntermediateDirectories: true)
+
+                let group = DispatchGroup()
+                let lock = NSLock()
+                var outURLs: [URL] = []
+                var firstError: Error?
+                var generatedCount = 0
+                var queuedCount = 0
 
                 for txt in txtFiles {
                     let category = txt.deletingPathExtension().lastPathComponent
@@ -257,6 +285,8 @@ final class SubliminalFolderBuilder {
                         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                         .filter { !$0.isEmpty && !$0.hasPrefix("#") }
 
+                    sendProgress("Processing category: \(category) (\(lines.count) lines)")
+
                     for (idx, phrase) in lines.enumerated() {
                         let fname = String(format: "%03d_%@", idx + 1, slug(phrase))
                         let outURL = categoryOut.appendingPathComponent(fname).appendingPathExtension("m4a")
@@ -268,6 +298,9 @@ final class SubliminalFolderBuilder {
                             continue
                         }
 
+                        queuedCount += 1
+                        if queuedCount % 10 == 0 { sendProgress("Queued \(queuedCount) subliminal clips…") }
+
                         group.enter()
                         TTSSynthesizer.shared.synthesizeToFile(
                             text: phrase,
@@ -277,39 +310,38 @@ final class SubliminalFolderBuilder {
                             pitch: voice.pitch,
                             outputURL: outURL
                         ) { ok in
-                            // We’re now on MAIN because TTSSynthesizer calls completion on main. Hop back to bg queue:
-                            //DispatchQueue.global(qos: backgroundQoS).async {
-                                if ok {
-                                    lock.lock()
-                                    //outputURLs.append(outURL)
-                                    //generatedCount += 1
-                                    lock.unlock()
-                                    //if (generatedCount % 20) == 0 {
-                                    //    log("  Synth complete (\(generatedCount)):", outURL.lastPathComponent)
-                                    //}
-                                } else if firstError == nil {
-                                    let err = NSError(domain: "SubliminalFolderBuilder",
-                                                      code: -1,
-                                                      userInfo: [NSLocalizedDescriptionKey: "TTS write failed: \(outURL.lastPathComponent)"])
-                                    firstError = err
-                                    log("ERROR:", err.localizedDescription)
+                            if ok {
+                                lock.lock()
+                                outURLs.append(outURL)
+                                generatedCount += 1
+                                lock.unlock()
+                                if (generatedCount % 20) == 0 {
+                                    log("  Synth complete (\(generatedCount)):", outURL.lastPathComponent)
+                                    sendProgress("Synthesized \(generatedCount) clips…")
                                 }
-                                group.leave()
-                            //}
+                            } else if firstError == nil {
+                                let err = NSError(domain: "SubliminalFolderBuilder",
+                                                  code: -1,
+                                                  userInfo: [NSLocalizedDescriptionKey: "TTS write failed: \(outURL.lastPathComponent)"])
+                                firstError = err
+                                log("ERROR:", err.localizedDescription)
+                                sendProgress("Error synthesizing: \(outURL.lastPathComponent)")
+                            }
+                            group.leave()
                         }
                     }
                 }
 
-                // Wait for all to complete before notify; ensures group stays valid
-                group.notify(queue: .global(qos: backgroundQoS)) {
-                    let elapsed = CFAbsoluteTimeGetCurrent() - t0
-                    log("DONE buildFromFolder.", "elapsed=\(String(format: "%.2fs", elapsed))")
-                    DispatchQueue.main.async {
-                        if let e = firstError {
-                            completion(.failure(e))
-                        } else {
-                            completion(.success(outURLs.sorted { $0.path < $1.path }))
-                        }
+                group.wait()
+
+                let elapsed = CFAbsoluteTimeGetCurrent() - t0
+                log("DONE buildFromFolder.", "elapsed=\(String(format: "%.2fs", elapsed))")
+                sendProgress("Subliminal build complete: \(generatedCount) generated.")
+                DispatchQueue.main.async {
+                    if let e = firstError {
+                        completion(.failure(e))
+                    } else {
+                        completion(.success(outURLs.sorted { $0.path < $1.path }))
                     }
                 }
 
@@ -318,37 +350,43 @@ final class SubliminalFolderBuilder {
                 DispatchQueue.main.async { completion(.failure(error)) }
             }
         }
-    }
 
-    
-    // MARK: - Helpers
+        if let opQueue = synthQueue {
+             opQueue.addOperation { work() }
+         } else {
+             DispatchQueue.global(qos: backgroundQoS).async { work() }
+         }
+     }
 
-    /// Simple file-name slugger: lowercase, ascii, short, safe
-    private static func slug(_ s: String) -> String {
-        let lowered = s.lowercased()
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        var out = lowered
-            .replacingOccurrences(of: "’", with: "")
-            .replacingOccurrences(of: "‘", with: "")
-            .replacingOccurrences(of: "“", with: "")
-            .replacingOccurrences(of: "”", with: "")
-            .replacingOccurrences(of: "'", with: "")
-            .replacingOccurrences(of: "\"", with: "")
-            .replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: ".", with: "")
-            .replacingOccurrences(of: ":", with: "")
-            .replacingOccurrences(of: ";", with: "")
-            .replacingOccurrences(of: "?", with: "")
-            .replacingOccurrences(of: "!", with: "")
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: "\\", with: "-")
-            .replacingOccurrences(of: "&", with: "and")
-            .replacingOccurrences(of: "+", with: "plus")
-            .replacingOccurrences(of: " ", with: "-")
 
-        out.unicodeScalars.removeAll { !allowed.contains($0) }
-        if out.count > 40 { out = String(out.prefix(40)) }
-        if out.isEmpty { out = "clip" }
-        return out
-    }
-}
+     // MARK: - Helpers
+
+     /// Simple file-name slugger: lowercase, ascii, short, safe
+     private static func slug(_ s: String) -> String {
+         let lowered = s.lowercased()
+         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+         var out = lowered
+             .replacingOccurrences(of: "’", with: "")
+             .replacingOccurrences(of: "‘", with: "")
+             .replacingOccurrences(of: "“", with: "")
+             .replacingOccurrences(of: "”", with: "")
+             .replacingOccurrences(of: "'", with: "")
+             .replacingOccurrences(of: "\"", with: "")
+             .replacingOccurrences(of: ",", with: "")
+             .replacingOccurrences(of: ".", with: "")
+             .replacingOccurrences(of: ":", with: "")
+             .replacingOccurrences(of: ";", with: "")
+             .replacingOccurrences(of: "?", with: "")
+             .replacingOccurrences(of: "!", with: "")
+             .replacingOccurrences(of: "/", with: "-")
+             .replacingOccurrences(of: "\\", with: "-")
+             .replacingOccurrences(of: "&", with: "and")
+             .replacingOccurrences(of: "+", with: "plus")
+             .replacingOccurrences(of: " ", with: "-")
+
+         out.unicodeScalars.removeAll { !allowed.contains($0) }
+         if out.count > 40 { out = String(out.prefix(40)) }
+         if out.isEmpty { out = "clip" }
+         return out
+     }
+ }
