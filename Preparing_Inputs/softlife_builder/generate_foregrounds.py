@@ -66,7 +66,7 @@ def chunk_text(text, max_length):
 
     return chunks
 
-def process_files(client, cfg, source_dir, out_dir, counter_file, start_counter, chunk_size):
+def process_files(client, cfg, source_dir, out_dir, counter_file, start_counter, chunk_size, files_per_chunk):
     # If start_counter is provided, use it and ignore any existing counter file.
     # If not provided (None), fall back to the persistent counter file or 1.
     global_counter = start_counter if start_counter is not None else 1
@@ -99,7 +99,7 @@ TEXT:
 
             text_chunks = chunk_text(text, chunk_size)
             for chunk in text_chunks:
-                prompt = prompt_template.format(count=7, source=chunk)
+                prompt = prompt_template.format(count=files_per_chunk, source=chunk)
 
                 response = client.chat.completions.create(
                     model=cfg["model"],
@@ -166,6 +166,12 @@ def parse_args():
             "If provided, overrides and resets the persistent counter."
         ),
     )
+    parser.add_argument(
+        "--files-per-chunk",
+        type=int,
+        default=7,
+        help="Number of foreground files to generate per text chunk",
+    )
     parser.add_argument("--source-dir", default="data/group2_source", help="Source directory containing input files")
     parser.add_argument("--out-dir", default="output/foreground", help="Output directory for generated files")
     parser.add_argument("--chunk-size", type=int, default=2000, help="Maximum characters per chunk when splitting text")
@@ -183,7 +189,7 @@ def main():
     counter_file = "counter.txt"
 
     os.makedirs(args.out_dir, exist_ok=True)
-    process_files(client, cfg, args.source_dir, args.out_dir, counter_file, args.start_counter, args.chunk_size)
+    process_files(client, cfg, args.source_dir, args.out_dir, counter_file, args.start_counter, args.chunk_size, args.files_per_chunk)
 
 
 if __name__ == "__main__":

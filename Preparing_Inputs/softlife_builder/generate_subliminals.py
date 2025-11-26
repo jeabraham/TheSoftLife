@@ -9,7 +9,7 @@ from openai import OpenAI  # or your local client wrapper
 from generate_foregrounds import chunk_text
 
 prompt_template = """
-Extract 10 short, punchy affirmations (3–12 words each) from this text.
+Extract 2 short, punchy affirmations (3–12 words each) from this text.
 Each should be independent and emotionally charged.
 Return as one line per affirmation, do not number the lines
 
