@@ -80,7 +80,7 @@ def process_files(client, cfg, source_dir, *, out_dir, counter_file, start_count
 
     prompt_template = """
 You are a hypnotic writing assistant. Rewrite or divide the following text into
-{count} short, self-contained files (2–6 sentences each). Maintain calm rhythm and thematic independence.
+{count} short, self-contained phrases (3–6 sentences each). Focus on humiliation, instructions, and mind-state. 
 Each piece should be complete and self-contained, including necessary context and subjects.
 Return results as a JSON array of objects with keys "title" and "body" only. Do not include any extra commentary.
 
@@ -137,8 +137,10 @@ TEXT:
                 except Exception as e:
                     print(f"❌ Failed to parse JSON for {filename}")
                     print(f"Raw content (first 500 chars):\n{content[:500]}")
-                    raise ValueError(f"Failed to parse model output as JSON for file {filename}: {e}")
-    
+                    print(f"Error was: {e}")
+                    # Skip this chunk and continue with the next one
+                    continue
+
                 for piece in outputs:
                     title = str(piece.get("title", f"piece_{global_counter}")).strip() or f"piece_{global_counter}"
                     body = str(piece.get("body", "")).strip()
