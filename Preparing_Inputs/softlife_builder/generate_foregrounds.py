@@ -67,10 +67,12 @@ def chunk_text(text, max_length):
     return chunks
 
 def process_files(client, cfg, source_dir, out_dir, counter_file, start_counter, chunk_size):
-    global_counter = start_counter
+    # If start_counter is provided, use it and ignore any existing counter file.
+    # If not provided (None), fall back to the persistent counter file or 1.
+    global_counter = start_counter if start_counter is not None else 1
 
-    # Initialize/read persistent counter
-    if os.path.exists(counter_file):
+    # Initialize/read persistent counter only when start_counter is not explicitly set
+    if start_counter is None and os.path.exists(counter_file):
         with open(counter_file, "r") as cf:
             content = cf.read().strip()
             if content.isdigit():
@@ -154,7 +156,16 @@ TEXT:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate foreground files from source texts.")
-    parser.add_argument("--start-counter", type=int, default=1, help="Starting counter for output files")
+    parser.add_argument(
+        "--start-counter",
+        type=int,
+        default=None,
+        help=(
+            "Starting counter for output files. "
+            "If omitted, resume from counter.txt (or 1 if it does not exist). "
+            "If provided, overrides and resets the persistent counter."
+        ),
+    )
     parser.add_argument("--source-dir", default="data/group2_source", help="Source directory containing input files")
     parser.add_argument("--out-dir", default="output/foreground", help="Output directory for generated files")
     parser.add_argument("--chunk-size", type=int, default=2000, help="Maximum characters per chunk when splitting text")
