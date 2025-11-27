@@ -113,7 +113,8 @@ final class PlaybackController: NSObject {
         switch type {
         case .began:
             // Interruption began (e.g., phone call, Siri)
-            wasPlayingBeforeInterruption = player.timeControlStatus == .playing
+            // Use rate > 0 in addition to status check for more reliable detection
+            wasPlayingBeforeInterruption = player.timeControlStatus == .playing && player.rate > 0
             print("🔇 Audio interruption began, was playing: \(wasPlayingBeforeInterruption)")
             if wasPlayingBeforeInterruption {
                 delegate?.playbackControllerDidPause(self)

@@ -185,8 +185,8 @@ struct ContentView: View {
     struct AudioSettingsView: View {
         @EnvironmentObject var vm: PlayerVM
         @AppStorage("subliminalBackgrounds") private var subliminalBackgrounds: Bool = false
-        @AppStorage("interruptionAutoResume") private var autoResume: Bool = false
-        @AppStorage("interruptionDuckOthers") private var duckOthers: Bool = false
+        @AppStorage(InterruptionSettings.autoResumeKey) private var autoResume: Bool = false
+        @AppStorage(InterruptionSettings.duckOthersKey) private var duckOthers: Bool = false
         
         var body: some View {
             VStack(alignment: .leading, spacing: 8) {
@@ -371,8 +371,8 @@ enum AppAudioSettings {
 
 /// Settings for handling audio interruptions (phone calls, Siri, etc.)
 enum InterruptionSettings {
-    private static let autoResumeKey = "interruptionAutoResume"
-    private static let duckOthersKey = "interruptionDuckOthers"
+    static let autoResumeKey = "interruptionAutoResume"
+    static let duckOthersKey = "interruptionDuckOthers"
     
     /// When true, automatically resume playback after an interruption ends
     static var autoResume: Bool {
