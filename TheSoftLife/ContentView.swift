@@ -169,7 +169,7 @@ struct ContentView: View {
         // Attach .onReceive to the container, not the Button
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             vm.reloadVoices()
-            vm.refreshDefaultVoiceIfNeeded()
+            //vm.refreshDefaultVoiceIfNeeded()
         }
     }
     

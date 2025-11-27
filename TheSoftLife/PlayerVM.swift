@@ -26,9 +26,22 @@ final class PlayerVM: NSObject, ObservableObject {
     @Published var languageCode = "en-CA" {
         didSet { updateControllerSettingsIfNeeded() }
     }
+    private let savedVoiceKey = "PlayerVM.savedVoiceIdentifier"
+    private let initialVoiceChosenKey = "PlayerVM.initialVoiceChosen"
+
     @Published var voiceIdentifier: String? = nil {
-        didSet { updateControllerSettingsIfNeeded() }
+        didSet {
+            updateControllerSettingsIfNeeded()
+            // Persist the user's chosen voice identifier (cleared when nil).
+            let ud = UserDefaults.standard
+            if let id = voiceIdentifier {
+                ud.set(id, forKey: savedVoiceKey)
+            } else {
+                ud.removeObject(forKey: savedVoiceKey)
+            }
+        }
     }
+    
     @Published var voices: [AVSpeechSynthesisVoice] = AVSpeechSynthesisVoice.speechVoices()
 
     // Add next to your other @Published settings
@@ -68,7 +81,16 @@ final class PlayerVM: NSObject, ObservableObject {
         super.init()
         controller.delegate = self
         reloadVoices()
-        refreshDefaultVoiceIfNeeded()
+        // Restore persisted voice if valid
+        if let saved = UserDefaults.standard.string(forKey: savedVoiceKey),
+           let v = AVSpeechSynthesisVoice(identifier: saved) {
+            voiceIdentifier = v.identifier
+            languageCode = v.language
+            // mark initial choice done so we don't auto-pick again
+            UserDefaults.standard.set(true, forKey: initialVoiceChosenKey)
+        } else {
+            refreshDefaultVoiceIfNeeded()
+        }
         restoreBookmarkedFolderIfAny()
     }
     
@@ -175,39 +197,52 @@ final class PlayerVM: NSObject, ObservableObject {
         default:        return 2
         }
     }
+    
+    
 
+    // Choose a sensible default only once (first install). Uses robust fallbacks.
     func refreshDefaultVoiceIfNeeded() {
-        if let id = voiceIdentifier, AVSpeechSynthesisVoice(identifier: id) != nil { return }
+        let ud = UserDefaults.standard
+        if ud.bool(forKey: initialVoiceChosenKey) { return } // already picked once
 
-        // 1) Stephanie (Enhanced) en-GB
-        if let steph = voices.first(where: { $0.name == "Stephanie" && $0.language.hasPrefix("en-GB") && $0.quality == .enhanced }) {
-            languageCode = steph.language
-            voiceIdentifier = steph.identifier
-            return
+        // Prefer: Stephanie (enhanced en-GB) if present, otherwise fallbacks.
+        var chosen: AVSpeechSynthesisVoice?
+
+        // 1) Try explicit Stephanie match first (if present)
+        chosen = voices.first(where: { $0.name == "Stephanie" && $0.language.hasPrefix("en-GB") && $0.quality == .enhanced })
+
+        // 2) Any enhanced en-GB
+        if chosen == nil {
+            chosen = voices.first(where: { $0.language.hasPrefix("en-GB") && $0.quality == .enhanced })
         }
-        // 2) Zoe (Premium) en-US
-        if let zoe = voices.first(where: { $0.name == "Zoe" && $0.language.hasPrefix("en-US") && $0.quality == .premium }) {
-            languageCode = zoe.language
-            voiceIdentifier = zoe.identifier
-            return
+
+        // 3) Premium en-US (Zoe) or similar
+        if chosen == nil {
+            chosen = voices.first(where: { $0.language.hasPrefix("en-US") && $0.quality == .premium })
         }
-        // 3) Any Enhanced en-GB
-        if let enGBEnh = voices.first(where: { $0.language.hasPrefix("en-GB") && $0.quality == .enhanced }) {
-            languageCode = enGBEnh.language
-            voiceIdentifier = enGBEnh.identifier
-            return
+
+        // 4) Any enhanced voice (any locale)
+        if chosen == nil {
+            chosen = voices.first(where: { $0.quality == .enhanced })
         }
-        // 4) Any en-GB
-        if let enGBAny = voices.first(where: { $0.language.hasPrefix("en-GB") }) {
-            languageCode = enGBAny.language
-            voiceIdentifier = enGBAny.identifier
-            return
+
+        // 5) Any English voice
+        if chosen == nil {
+            chosen = voices.first(where: { $0.language.hasPrefix("en") })
         }
-        // 5) Fallback
-        if let first = voices.first {
-            languageCode = first.language
-            voiceIdentifier = first.identifier
+
+        // 6) Last resort: any available voice
+        if chosen == nil {
+            chosen = voices.first
         }
+
+        if let v = chosen {
+            languageCode = v.language
+            voiceIdentifier = v.identifier
+        }
+
+        // Mark that we performed the initial-choice step (even if no voice found)
+        ud.set(true, forKey: initialVoiceChosenKey)
     }
 
     // MARK: - Folder picker / bookmarking
