@@ -52,6 +52,10 @@ final class PlaybackController: NSObject {
 
     // Random loop
     private var randomTimer: Timer?
+    
+    // Interruption handling
+    private var interruptionObserver: Any?
+    private var wasPlayingBeforeInterruption = false
 
     private var cacheDir: URL {
         try! fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -84,6 +88,80 @@ final class PlaybackController: NSObject {
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         observePlaybackEnd()
         configureAudioSession()
+        observeAudioInterruptions()
+    }
+    
+    // MARK: - Audio Interruption Handling
+    
+    private func observeAudioInterruptions() {
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleInterruption(notification)
+        }
+    }
+    
+    private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+        
+        switch type {
+        case .began:
+            // Interruption began (e.g., phone call, Siri)
+            wasPlayingBeforeInterruption = player.timeControlStatus == .playing
+            print("🔇 Audio interruption began, was playing: \(wasPlayingBeforeInterruption)")
+            if wasPlayingBeforeInterruption {
+                delegate?.playbackControllerDidPause(self)
+            }
+            
+        case .ended:
+            // Interruption ended
+            print("🔊 Audio interruption ended")
+            guard let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt else {
+                return
+            }
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+            
+            // Check if we should resume playback
+            if options.contains(.shouldResume) && wasPlayingBeforeInterruption {
+                // Only auto-resume if the setting is enabled
+                if InterruptionSettings.autoResume {
+                    print("▶️ Auto-resuming after interruption")
+                    ensureActiveAudioSession()
+                    player.playImmediately(atRate: 1.0)
+                    delegate?.playbackControllerDidPlay(self)
+                } else {
+                    // Don't auto-resume, but notify delegate that we're paused
+                    print("⏸️ Not auto-resuming (setting disabled)")
+                    delegate?.playbackControllerDidPause(self)
+                }
+            }
+            wasPlayingBeforeInterruption = false
+            
+        @unknown default:
+            break
+        }
+    }
+    
+    /// Returns the current playback state (true if playing)
+    var isCurrentlyPlaying: Bool {
+        player.timeControlStatus == .playing
+    }
+    
+    /// Syncs the delegate with the current playback state
+    /// Call this when the app returns to foreground to ensure UI matches actual state
+    func syncPlaybackState() {
+        if player.timeControlStatus == .playing {
+            delegate?.playbackControllerDidPlay(self)
+        } else if !player.items().isEmpty {
+            // Has items but not playing = paused
+            delegate?.playbackControllerDidPause(self)
+        }
     }
     
     private func isSilenceURL(_ url: URL) -> Bool { url.lastPathComponent.hasPrefix("silence-") }
@@ -303,6 +381,7 @@ final class PlaybackController: NSObject {
         randomTimer?.invalidate()
         if let o = itemEndObserver { NotificationCenter.default.removeObserver(o) }
         if let o = itemFailObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = interruptionObserver { NotificationCenter.default.removeObserver(o) }
     }
     
     private func debugListCache() {
@@ -556,11 +635,21 @@ final class PlaybackController: NSObject {
     private func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .default, options: [.allowBluetooth, .allowAirPlay])
+            var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowAirPlay]
+            // If duckOthers is enabled, add duckOthers option to mix with other audio
+            if InterruptionSettings.duckOthers {
+                options.insert(.duckOthers)
+            }
+            try session.setCategory(.playback, mode: .default, options: options)
             try session.setActive(true)
         } catch {
             print("Audio session error: \(error)")
         }
+    }
+    
+    /// Reconfigure the audio session with current settings (e.g., after settings change)
+    func reconfigureAudioSession() {
+        configureAudioSession()
     }
 
     private func enqueueSilence(seconds: TimeInterval) {

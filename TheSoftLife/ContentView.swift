@@ -89,6 +89,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             vm.updateStatus()     // refresh visible file/task status
+            vm.syncPlaybackState()  // sync play/pause button with actual playback state
         }
     }
 
@@ -184,9 +185,11 @@ struct ContentView: View {
     struct AudioSettingsView: View {
         @EnvironmentObject var vm: PlayerVM
         @AppStorage("subliminalBackgrounds") private var subliminalBackgrounds: Bool = false
+        @AppStorage("interruptionAutoResume") private var autoResume: Bool = false
+        @AppStorage("interruptionDuckOthers") private var duckOthers: Bool = false
+        
         var body: some View {
-            //Form {
-                //Section(header: Text("Audio Backgrounds")) {
+            VStack(alignment: .leading, spacing: 8) {
                 Toggle("Subliminal backgrounds", isOn: $subliminalBackgrounds)
                     .onChange(of: subliminalBackgrounds) { on in
                         print("[Settings] subliminalBackgrounds →", on)
@@ -197,13 +200,24 @@ struct ContentView: View {
                             }
                         }
                     }
-            
-                    //Text("Adds low-level noise + subliminals between files and behind explicit narration.")
-                    //    .font(.footnote)
-                    //    .foregroundColor(.secondary)
-                //}
-            //}
-            //.navigationTitle("Audio")
+                
+                Divider()
+                
+                Text("Interruption Handling").font(.subheadline).bold()
+                
+                Toggle("Auto-resume after interruption", isOn: $autoResume)
+                Text("Resume playback after phone calls, Siri, etc.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                
+                Toggle("Duck audio instead of pausing", isOn: $duckOthers)
+                    .onChange(of: duckOthers) { _ in
+                        vm.reconfigureAudioSession()
+                    }
+                Text("Lower volume when other apps play audio.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
         }
     }
     
@@ -352,6 +366,24 @@ enum AppAudioSettings {
     static var subliminalBackgrounds: Bool {
         get { UserDefaults.standard.bool(forKey: key) }
         set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+}
+
+/// Settings for handling audio interruptions (phone calls, Siri, etc.)
+enum InterruptionSettings {
+    private static let autoResumeKey = "interruptionAutoResume"
+    private static let duckOthersKey = "interruptionDuckOthers"
+    
+    /// When true, automatically resume playback after an interruption ends
+    static var autoResume: Bool {
+        get { UserDefaults.standard.bool(forKey: autoResumeKey) }
+        set { UserDefaults.standard.set(newValue, forKey: autoResumeKey) }
+    }
+    
+    /// When true, duck (lower volume) instead of pausing when other audio plays
+    static var duckOthers: Bool {
+        get { UserDefaults.standard.bool(forKey: duckOthersKey) }
+        set { UserDefaults.standard.set(newValue, forKey: duckOthersKey) }
     }
 }
 
