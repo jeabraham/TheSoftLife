@@ -123,13 +123,11 @@ final class PlaybackController: NSObject {
         case .ended:
             // Interruption ended
             print("🔊 Audio interruption ended")
-            guard let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt else {
-                return
-            }
-            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
             
             // Check if we should resume playback
-            if options.contains(.shouldResume) && wasPlayingBeforeInterruption {
+            // Note: We check wasPlayingBeforeInterruption regardless of .shouldResume flag,
+            // because Siri and some other interruptions may not set this flag reliably
+            if wasPlayingBeforeInterruption {
                 // Only auto-resume if the setting is enabled
                 if InterruptionSettings.autoResume {
                     print("▶️ Auto-resuming after interruption")
