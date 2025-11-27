@@ -17,7 +17,6 @@ struct ContentView: View {
     @EnvironmentObject var vm: PlayerVM
     @State private var showVoiceSheet = false
     @State private var showInterruptionsSheet = false
-    @State private var showMenu = false
 
     var body: some View {
         NavigationView {
