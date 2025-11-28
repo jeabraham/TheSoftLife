@@ -1,5 +1,7 @@
 import os
 import json
+import re
+
 import yaml
 import argparse
 from openai import OpenAI  # or your local client wrapper
@@ -79,12 +81,44 @@ def process_files(client, cfg, source_dir, *, out_dir, counter_file, start_count
                 global_counter = int(content)
 
     prompt_template = """
-You are a hypnotic writing assistant. Rewrite or divide the following text into
-{count} short, self-contained phrases (3–6 sentences each). Focus on humiliation, instructions, and mind-state. 
-Each piece should be complete and self-contained, including necessary context and subjects.
-Return results as a JSON array of objects with keys "title" and "body" only. Do not include any extra commentary.
+Rewrite the following text keeping its original message.
+Use the voice of a modern therapist or hypnotist specializing in psychological control and humiliation.
+You speak to reinforce the reader’s role as a submissive husband who has permanently surrendered his rights to his empowered and sexually autonomous wife.
+You rewrite the text knowing he fears punishment, including physical pain or denial of basic comfort and needs, 
+yet he worships her beauty, intelligence, and complete freedom. He already knows his role is downtrodden servitude alongside actively 
+uplifting her joy and freedom, but your role is to reinforce and deepen his mindset. 
+Use humiliation or similar techniques as a mechanisms, taking a mocking tone if appropriate. You know he is aroused by the marriage dynamic and his position,
+and the possibility that his wife may take a lover. 
+You are a hypnotist that understands the fear of blackmail, so you directly hint at blackmailing him or mention how his
+wife can controls him through blackmail. Your objective is to rewriting the message in a way
+that rewires his mind to ensure his lifelong commitment, 
+willingness to sacrifice, and feelings of being beneath her with only one possible life involving hard work, 
+discomfort, humiliation, obedience, and
+admiration. Be sure to rewrite the message in the third person, as a hypnotist or therapist talking to the husband.
+You should write one phrase for the husband, and return exactly one JSON object with {{ "title": "...", "body": "..." }} structure.
+Do not include any content outside of this JSON. No explanations, no commentary.
 
-TEXT:
+JSON REQUIREMENTS:
+- Output only valid JSON.
+- Output raw JSON (not stringified).
+- Do NOT wrap the JSON in a string literal.
+- Use exact JSON syntax.
+- The item must follow this structure:
+  {{ "title": "...", "body": "..." }}
+- No smart quotes (“ ”) — use only standard ASCII quotes (").
+- No line breaks, paragraph breaks, or control characters inside strings.
+- No trailing commas.
+- You must output exactly one JSON object and nothing else (no arrays, no multiple objects).
+
+Example formatting:
+Correct:   {{ "title": "Example", "body": "Sample text." }}
+Incorrect: ["{{\"title\":\"Example\",\"body\":\"Sample text.\"}}"]
+
+IMPORTANT EXECUTION RULE:
+First, think silently and verify your JSON structure internally.
+When fully validated, output the JSON object in a single pass without modification.
+
+TEXT TO TRANSFORM:
 {source}
 """
 
@@ -107,41 +141,107 @@ TEXT:
                     temperature=0.8,
                     max_tokens=1500,
                 )
-    
+
                 content = response.choices[0].message.content.strip()
-    
-                # Debug: Print the raw response if it's suspiciously short or empty
-                if not content:
-                    print(f"⚠️  WARNING: Empty response from model for file {filename}")
-                    print(f"Skipping file: {filename}")
-                    continue
-    
-                print(f"Processing {filename}, response length: {len(content)} chars")
-    
-                # Ensure we parse only the JSON array
-                # Some models may wrap JSON in code fences; strip them if present
+
+                # 1. Normalize smart quotes and remove newlines inside strings
+                content = content.replace("\u201c", '"').replace("\u201d", '"')
+                content = re.sub(r'\s*\n\s*', ' ', content)
+
+                # 2. Strip markdown code fences if present
                 if content.startswith("```"):
-                    # strip markdown code fences if present
                     lines = content.splitlines()
-                    # remove first and last fence lines if they look like fences
                     if lines and lines[0].startswith("```"):
                         lines = lines[1:]
                     if lines and lines[-1].startswith("```"):
                         lines = lines[:-1]
                     content = "\n".join(lines).strip()
-    
+
+                # 3. Unwrap JSON-looking string (e.g., "\"{...}\"")
+                m = re.fullmatch(r'''["']\s*(\{.*\}|\[.*\])\s*["']''', content)
+                if m:
+                    content = m.group(1).replace('\\"', '"').strip()
+
+                # 4. Trim leading/trailing noise outside first JSON block
+                first_bracket = min(
+                    content.find("{") if "{" in content else float('inf'),
+                    content.find("[") if "[" in content else float('inf')
+                )
+                if first_bracket > 0:
+                    content = content[first_bracket:].lstrip()
+
+                last_bracket = max(
+                    content.rfind("}") if "}" in content else -1,
+                    content.rfind("]") if "]" in content else -1
+                )
+                if last_bracket != -1 and last_bracket < len(content) - 1:
+                    content = content[:last_bracket + 1].rstrip()
+
+                # 5. If a single object is returned, wrap it in an array
+                if content.startswith("{") and content.endswith("}"):
+                    content = "[" + content + "]"
+
+                # ---
+                # Your existing array handling logic continues here (unchanged)
+                # ---
+
+                # Merge multiple arrays into one
+                array_matches = re.findall(r'\[[^\[\]]*\]', content)
+                if len(array_matches) > 1:
+                    combined_objects = []
+                    for arr in array_matches:
+                        try:
+                            parsed = json.loads(arr)
+                            if isinstance(parsed, list):
+                                combined_objects.extend(parsed)
+                        except:
+                            pass
+                    content = json.dumps(combined_objects)
+
+                # If still multiple objects without brackets, capture and wrap
+                elif content.count("{") > 1 and not content.strip().startswith("["):
+                    objs = re.findall(r'\{[^{}]+\}', content)
+                    if objs:
+                        content = "[" + ",".join(objs) + "]"
+
+                # Final safety check
+                if not content:
+                    print(f"⚠️  WARNING: Empty response from model for file {filename}")
+                    continue
+
+                print(f"Processing {filename}, response length: {len(content)} chars")
+
+                # Final parsing
                 try:
                     outputs = json.loads(content)
                     if not isinstance(outputs, list):
-                        raise ValueError("Model did not return a JSON array.")
+                        outputs = [outputs]
                 except Exception as e:
                     print(f"❌ Failed to parse JSON for {filename}")
-                    print(f"Raw content (first 500 chars):\n{content[:500]}")
+                    print(f"Raw content:\n{content}")
                     print(f"Error was: {e}")
-                    # Skip this chunk and continue with the next one
                     continue
 
-                for piece in outputs:
+                # Normalize outputs into a flat list of dicts
+                normalized_outputs = []
+
+                def _collect_dicts(item):
+                    if isinstance(item, dict):
+                        normalized_outputs.append(item)
+                    elif isinstance(item, list):
+                        for sub in item:
+                            _collect_dicts(sub)
+                    else:
+                        # Ignore non-dict, non-list items
+                        pass
+
+                _collect_dicts(outputs)
+
+                if not normalized_outputs:
+                    print(f"⚠️  WARNING: No valid objects found in model response for file {filename}")
+                    continue
+
+                for piece in normalized_outputs:
                     title = str(piece.get("title", f"piece_{global_counter}")).strip() or f"piece_{global_counter}"
                     body = str(piece.get("body", "")).strip()
                     safe_title = "_".join(title.split())
@@ -150,6 +250,7 @@ TEXT:
                     with open(out_path, "w", encoding="utf-8") as out:
                         out.write(body + "\n")
                     global_counter += 1
+
     finally:
         # Persist updated counter
         with open(counter_file, "w", encoding="utf-8") as cf:
