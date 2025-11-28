@@ -80,57 +80,10 @@ def process_files(client, cfg, source_dir, *, out_dir, counter_file, start_count
             if content.isdigit():
                 global_counter = int(content)
 
-    prompt_template = """
-You are a professional hypnotist hired by a wife to modify instructional phrases that her husband listens to.
-This husband has recently given up all control of his possessions and time to his wife, in a legal agreement. 
-This agreement is for the rest of his life, and is enforced by clauses that would ruin him if he leaves or stops 
-serving and obeying her, or takes any possessions.
-The agreement specifies that, over time, he may become a completely controlled slave with no rights or control. 
-The wife (your client) is excited and aroused at this new direction in their marriage, and imagines that some day she might take a lover, as she 
-adopts her husband's role to be less like a husband, and more like a devoted slave.  
-In the mean time, she relies on his worship of her beauty and intelligence.  
-She knows that any time she gives him a strict command, he gets hard, but he doesn't always obey quickly or adequately.
-He cannot orgasm without permission.
-She knows that she can use pain, humiliation, or removal of basic needs and comfort to control him.
-She wishes he would fall into his new role more quickly, through his own thoughts in his mind, this is why you have been hired.
-She also wants him to be focused on her life, happiness, freedom, and goals, not only on his own submission and debasement.
-
-Below is ONE of many source phrases that the man listens to, in a random order with other phrases.
-
-Consider whether this source phrase is consistent with the wife's vision and the husband's evolving role.  If it is consistent, do not change it.
-However, as an expert hypnotist, you role is to adopt phrases so that they assist in the husband's rewirement, 
-slowly turning him into the wife' vision of him.  Keep the intent of the source phrase, its length, and the pattern.  Your role
-is only to enhance it to support the wife's vision, not to write a brand-new phrase.
-
-The phrase must be in the third person written as if you, the hypnotist, is talking to the husband.
-Compare the word count of your phrase with the source phrase, to ensure the lengths are similar. 
-
-Return exactly one JSON object with {{ "title": "...", "body": "..." }} structure.
-Do not include any content outside of this JSON. No explanations, no commentary.
-
-JSON REQUIREMENTS:
-- Output only valid JSON.
-- Output raw JSON (not stringified).
-- Do NOT wrap the JSON in a string literal.
-- Use exact JSON syntax.
-- The item must follow this structure:
-  {{ "title": "...", "body": "..." }}
-- No smart quotes (“ ”) — use only standard ASCII quotes (").
-- No line breaks, paragraph breaks, or control characters inside strings.
-- No trailing commas.
-- You must output exactly one JSON object and nothing else (no arrays, no multiple objects).
-
-Example formatting:
-Correct:   {{ "title": "Example", "body": "Sample text." }}
-Incorrect: ["{{\"title\":\"Example\",\"body\":\"Sample text.\"}}"]
-
-IMPORTANT EXECUTION RULE:
-First, think silently and verify your JSON structure internally.
-When fully validated, output the JSON object in a single pass without modification.
-
-PHRASE TO MODIFY:
-{source}
-"""
+    # Load the prompt template from configuration
+    prompt_template = cfg.get("foreground_prompt_template")
+    if not isinstance(prompt_template, str) or not prompt_template.strip():
+        raise ValueError("Missing or empty 'foreground_prompt_template' in llm_config.yaml")
 
     try:
         for filename in sorted(os.listdir(source_dir)):
@@ -307,7 +260,38 @@ def parse_args():
     parser.add_argument("--source-dir", default="data/group2_source", help="Source directory containing input files")
     parser.add_argument("--out-dir", default="output/foreground", help="Output directory for generated files")
     parser.add_argument("--chunk-size", type=int, default=2000, help="Maximum characters per chunk when splitting text")
+    parser.add_argument(
+        "--config-file",
+        default="llm_config.yaml",
+        help="Path to YAML configuration file (default: llm_config.yaml)",
+    )
     return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    # Load config
+    with open(args.config_file, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"])
+    counter_file = "counter.txt"
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    process_files(
+        client=client,
+        cfg=cfg,
+        source_dir=args.source_dir,
+        out_dir=args.out_dir,
+        counter_file=counter_file,
+        start_counter=args.start_counter,
+        chunk_size=args.chunk_size,
+        files_per_chunk=args.files_per_chunk,
+    )
+
+if __name__ == "__main__":
+    main()
 
 
 def main():
