@@ -1,3 +1,8 @@
 base_url: "http://localhost:11434/v1"  # Ollama endpoint or LM Studio
 api_key: "none"
-model: "artifish/llama3.2-uncensored"
+# Used for 001 to 011 model: "taozhiyuai/llama-3-8b-lexi-uncensored:v1_f16"
+# model: "gdisney/mistral-large-uncensored"
+# model: "wizard-vicuna-uncensored"
+model: "taozhiyuai/llama-3-8b-lexi-uncensored:v1_f16" #015 to 038, seems good
+#model: "Godmoded/llama3-lexi-uncensored"
+# model: "dolphin-mistral"

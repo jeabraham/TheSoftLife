@@ -81,21 +81,31 @@ def process_files(client, cfg, source_dir, *, out_dir, counter_file, start_count
                 global_counter = int(content)
 
     prompt_template = """
-Rewrite the following text keeping its original message.
-Use the voice of a modern therapist or hypnotist specializing in psychological control and humiliation.
-You speak to reinforce the reader’s role as a submissive husband who has permanently surrendered his rights to his empowered and sexually autonomous wife.
-You rewrite the text knowing he fears punishment, including physical pain or denial of basic comfort and needs, 
-yet he worships her beauty, intelligence, and complete freedom. He already knows his role is downtrodden servitude alongside actively 
-uplifting her joy and freedom, but your role is to reinforce and deepen his mindset. 
-Use humiliation or similar techniques as a mechanisms, taking a mocking tone if appropriate. You know he is aroused by the marriage dynamic and his position,
-and the possibility that his wife may take a lover. 
-You are a hypnotist that understands the fear of blackmail, so you directly hint at blackmailing him or mention how his
-wife can controls him through blackmail. Your objective is to rewriting the message in a way
-that rewires his mind to ensure his lifelong commitment, 
-willingness to sacrifice, and feelings of being beneath her with only one possible life involving hard work, 
-discomfort, humiliation, obedience, and
-admiration. Be sure to rewrite the message in the third person, as a hypnotist or therapist talking to the husband.
-You should write one phrase for the husband, and return exactly one JSON object with {{ "title": "...", "body": "..." }} structure.
+You are a professional hypnotist hired by a wife to modify instructional phrases that her husband listens to.
+This husband has recently given up all control of his possessions and time to his wife, in a legal agreement. 
+This agreement is for the rest of his life, and is enforced by clauses that would ruin him if he leaves or stops 
+serving and obeying her, or takes any possessions.
+The agreement specifies that, over time, he may become a completely controlled slave with no rights or control. 
+The wife (your client) is excited and aroused at this new direction in their marriage, and imagines that some day she might take a lover, as she 
+adopts her husband's role to be less like a husband, and more like a devoted slave.  
+In the mean time, she relies on his worship of her beauty and intelligence.  
+She knows that any time she gives him a strict command, he gets hard, but he doesn't always obey quickly or adequately.
+He cannot orgasm without permission.
+She knows that she can use pain, humiliation, or removal of basic needs and comfort to control him.
+She wishes he would fall into his new role more quickly, through his own thoughts in his mind, this is why you have been hired.
+She also wants him to be focused on her life, happiness, freedom, and goals, not only on his own submission and debasement.
+
+Below is ONE of many source phrases that the man listens to, in a random order with other phrases.
+
+Consider whether this source phrase is consistent with the wife's vision and the husband's evolving role.  If it is consistent, do not change it.
+However, as an expert hypnotist, you role is to adopt phrases so that they assist in the husband's rewirement, 
+slowly turning him into the wife' vision of him.  Keep the intent of the source phrase, its length, and the pattern.  Your role
+is only to enhance it to support the wife's vision, not to write a brand-new phrase.
+
+The phrase must be in the third person written as if you, the hypnotist, is talking to the husband.
+Compare the word count of your phrase with the source phrase, to ensure the lengths are similar. 
+
+Return exactly one JSON object with {{ "title": "...", "body": "..." }} structure.
 Do not include any content outside of this JSON. No explanations, no commentary.
 
 JSON REQUIREMENTS:
@@ -118,7 +128,7 @@ IMPORTANT EXECUTION RULE:
 First, think silently and verify your JSON structure internally.
 When fully validated, output the JSON object in a single pass without modification.
 
-TEXT TO TRANSFORM:
+PHRASE TO MODIFY:
 {source}
 """
 
@@ -163,12 +173,15 @@ TEXT TO TRANSFORM:
                     content = m.group(1).replace('\\"', '"').strip()
 
                 # 4. Trim leading/trailing noise outside first JSON block
-                first_bracket = min(
-                    content.find("{") if "{" in content else float('inf'),
-                    content.find("[") if "[" in content else float('inf')
-                )
-                if first_bracket > 0:
-                    content = content[first_bracket:].lstrip()
+                # Find the first "{" or "[" if present
+                brace_index = content.find("{")
+                bracket_index = content.find("[")
+                candidates = [idx for idx in (brace_index, bracket_index) if idx != -1]
+
+                if candidates:
+                    first_bracket = min(candidates)
+                    if first_bracket > 0:
+                        content = content[first_bracket:].lstrip()
 
                 last_bracket = max(
                     content.rfind("}") if "}" in content else -1,
@@ -244,9 +257,25 @@ TEXT TO TRANSFORM:
                 for piece in normalized_outputs:
                     title = str(piece.get("title", f"piece_{global_counter}")).strip() or f"piece_{global_counter}"
                     body = str(piece.get("body", "")).strip()
+
+                    # Sanitize title to create a safe filename
                     safe_title = "_".join(title.split())
+
+                    # Replace or remove characters that are unsafe in filenames or create directories
+                    invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+                    for ch in invalid_chars:
+                        safe_title = safe_title.replace(ch, "_")
+
+                    # Truncate overly long filenames (optional safety)
+                    if len(safe_title) > 150:
+                        safe_title = safe_title[:150]
+
                     fname = f"{global_counter:03d}_{safe_title}.txt"
                     out_path = os.path.join(out_dir, fname)
+
+                    # Ensure the parent directory exists (defensive, in case of unexpected separators)
+                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
                     with open(out_path, "w", encoding="utf-8") as out:
                         out.write(body + "\n")
                     global_counter += 1
