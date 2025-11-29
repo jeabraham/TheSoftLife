@@ -15,7 +15,8 @@ fileprivate func formatRange(_ lo: Double, _ hi: Double) -> String {
 
 struct ContentView: View {
     @EnvironmentObject var vm: PlayerVM
-    @State private var showVoiceSheet = false   // <- add this
+    @State private var showVoiceSheet = false
+    @State private var showInterruptionsSheet = false
 
     var body: some View {
         NavigationView {
@@ -37,7 +38,7 @@ struct ContentView: View {
                     }
                     ProgressView(value: Double(vm.processedFiles), total: Double(max(vm.totalFiles, 1)))
                 }
-                .font(.headline)                // … your header / status UI …
+                .font(.headline)
 
                 HStack(spacing: 12) {
                     Button("Choose Folder") { presentFolderPicker() }
@@ -49,12 +50,22 @@ struct ContentView: View {
 
                 Divider()
                 randomControls
-                Spacer()
-                AudioSettingsView().environmentObject(vm)
                 
-                Button("Voice & Speech…") { showVoiceSheet = true }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top, 8)
+                Spacer()
+                
+                // Subliminal backgrounds toggle stays on main page
+                Toggle("Subliminal backgrounds", isOn: Binding(
+                    get: { AppAudioSettings.subliminalBackgrounds },
+                    set: { newValue in
+                        AppAudioSettings.subliminalBackgrounds = newValue
+                        print("[Settings] subliminalBackgrounds →", newValue)
+                        if newValue {
+                            DispatchQueue.global(qos: .background).async {
+                                rebuildSubliminalsIfNeeded(folderURL: vm.folderURL, vm: vm)
+                            }
+                        }
+                    }
+                ))
 
                 Spacer()
             }
@@ -62,7 +73,11 @@ struct ContentView: View {
             .navigationTitle("The Soft Life")
             .sheet(isPresented: $showVoiceSheet) {
                 VoiceSettingsView()
-                    .environmentObject(vm) // pass the same VM
+                    .environmentObject(vm)
+            }
+            .sheet(isPresented: $showInterruptionsSheet) {
+                InterruptionSettingsView()
+                    .environmentObject(vm)
             }
             .alert("Stop playback?", isPresented: $vm.showStopConfirm) {
                 Button("Cancel", role: .cancel) {}
@@ -71,6 +86,23 @@ struct ContentView: View {
                 Text("This will clear the queue.")
             }
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Menu {
+                        Button {
+                            showVoiceSheet = true
+                        } label: {
+                            Label("Voice & Speech", systemImage: "waveform")
+                        }
+                        Button {
+                            showInterruptionsSheet = true
+                        } label: {
+                            Label("Interruptions", systemImage: "bell.badge")
+                        }
+                    } label: {
+                        Image(systemName: "line.3.horizontal")
+                            .imageScale(.large)
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     RoutePicker().frame(width: 28, height: 28)
                 }
@@ -88,7 +120,8 @@ struct ContentView: View {
             rebuildSubliminalsIfNeeded(folderURL: newFolder, vm: vm)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            vm.updateStatus()     // refresh visible file/task status
+            vm.updateStatus()
+            vm.syncPlaybackState()
         }
     }
 
@@ -181,29 +214,38 @@ struct ContentView: View {
         vm.pickFolder(presenter: root)
     }
     
-    struct AudioSettingsView: View {
+    struct InterruptionSettingsView: View {
         @EnvironmentObject var vm: PlayerVM
-        @AppStorage("subliminalBackgrounds") private var subliminalBackgrounds: Bool = false
+        @Environment(\.dismiss) private var dismiss
+        @AppStorage(InterruptionSettings.autoResumeKey) private var autoResume: Bool = false
+        @AppStorage(InterruptionSettings.duckOthersKey) private var duckOthers: Bool = false
+        
         var body: some View {
-            //Form {
-                //Section(header: Text("Audio Backgrounds")) {
-                Toggle("Subliminal backgrounds", isOn: $subliminalBackgrounds)
-                    .onChange(of: subliminalBackgrounds) { on in
-                        print("[Settings] subliminalBackgrounds →", on)
-                        if on {
-                            // Launch builder as soon as user turns this ON
-                            DispatchQueue.global(qos: .background).async {
-                                rebuildSubliminalsIfNeeded(folderURL: vm.folderURL, vm: vm)
-                            }
-                        }
+            NavigationView {
+                Form {
+                    Section {
+                        Toggle("Auto-resume after interruption", isOn: $autoResume)
+                    } footer: {
+                        Text("Automatically resume playback after phone calls, Siri, or other audio interruptions end.")
                     }
-            
-                    //Text("Adds low-level noise + subliminals between files and behind explicit narration.")
-                    //    .font(.footnote)
-                    //    .foregroundColor(.secondary)
-                //}
-            //}
-            //.navigationTitle("Audio")
+                    
+                    Section {
+                        Toggle("Duck audio instead of pausing", isOn: $duckOthers)
+                            .onChange(of: duckOthers) { _ in
+                                vm.reconfigureAudioSession()
+                            }
+                    } footer: {
+                        Text("Lower volume when other apps play audio instead of pausing playback.")
+                    }
+                }
+                .navigationTitle("Interruptions")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+            }
         }
     }
     
@@ -352,6 +394,24 @@ enum AppAudioSettings {
     static var subliminalBackgrounds: Bool {
         get { UserDefaults.standard.bool(forKey: key) }
         set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+}
+
+/// Settings for handling audio interruptions (phone calls, Siri, etc.)
+enum InterruptionSettings {
+    static let autoResumeKey = "interruptionAutoResume"
+    static let duckOthersKey = "interruptionDuckOthers"
+    
+    /// When true, automatically resume playback after an interruption ends
+    static var autoResume: Bool {
+        get { UserDefaults.standard.bool(forKey: autoResumeKey) }
+        set { UserDefaults.standard.set(newValue, forKey: autoResumeKey) }
+    }
+    
+    /// When true, duck (lower volume) instead of pausing when other audio plays
+    static var duckOthers: Bool {
+        get { UserDefaults.standard.bool(forKey: duckOthersKey) }
+        set { UserDefaults.standard.set(newValue, forKey: duckOthersKey) }
     }
 }
 

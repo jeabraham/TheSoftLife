@@ -143,6 +143,17 @@ final class PlayerVM: NSObject, ObservableObject {
     func pauseResume() { controller.pauseResume() }
     func stopTapped() { showStopConfirm = true }
     func stopConfirmed() { controller.stop() }
+    
+    /// Syncs the isPlaying state with the actual playback state.
+    /// Call this when the app returns to foreground to update the UI.
+    func syncPlaybackState() {
+        controller.syncPlaybackState()
+    }
+    
+    /// Reconfigures the audio session after settings change (e.g., duckOthers toggle)
+    func reconfigureAudioSession() {
+        controller.reconfigureAudioSession()
+    }
 
     // MARK: - Dynamic Settings Update
     
